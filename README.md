@@ -1,41 +1,45 @@
+![Screenwriter Banner](./public/icons/banner-nobg-dark.png)
+
 # Screenwriter
 
-- Self-hosted, unbranded [Fountain](https://fountain.io/syntax/) screenplay editor.
-- Vue 3 · CodeMirror 6 · Yjs · Node 24 · SQLite.
-- One container; no external database or collaboration service.
+Basic self-hosted collaborative [Fountain](https://fountain.io/syntax/) screenplay editor.
+
+Built with: Vue 3, CodeMirror 6, Yjs, Node 24 and SQLite.
+
+![Mockup](./public/icons/mockup.png)
 
 ## Features
 
-- Live formatting: edit a line's source; render it when leaving. Multiline blocks stay editable until the cursor is two lines below.
-- Split view: highlighted source, live preview, and two-way synchronized scrolling.
-- Live collaboration, line-side comment bubbles, replies, and inline edit suggestions with hover-to-review.
-- Automatic character/location sheets, unused-sheet cleanup, Markdown fields, and image moodboards.
-- Archive, restore, or delete screenplays from **Manage screenplays**; sheets have Active/Archived views and confirmed deletion without changing screenplay text.
-- Rename characters/locations across screenplay text, scratchpad, and sheet notes.
-- Shared Markdown scratchpad with preview.
-- Automatic character/location suggestions while typing, with Tab or touch to accept; linked passage images on hover.
-- Screenplay shortcuts: INT./EXT., heading times, SHOT:/VFX:/SFX:, and dialogue extensions (CONT'D, V.O., O.S., O.C.).
-- Bold character cues and production labels in live/split views and PDF; a small name reminder for unnamed guests.
-- Fully capitalized character/location mentions are bold in action and dialogue too; mixed-case mentions and unrelated capitals stay unchanged.
-- Formatting shortcuts, selection wrapping, and persistent light/dark themes.
-- Full-width phone editing, Write/Preview tabs, keyboard-aware sizing, and touch screenplay shortcuts.
-- Installable PWA with opt-in updates; only public assets are cached, never documents or identity.
-- Named versions, automatic snapshots, and restore with a backup.
-- Fountain import/export and screenplay PDF export, including dual dialogue.
+- **No in-app AI Features**
+- Desktop and mobile-friendly, with touch and keyboard shortcuts.
+- Real-Time collaboration
+- Basic Versioning
+- Full Fountain syntax support, including dual dialogue, notes, and comments.
+- Character and Location sheets
+- Commenting and Suggestions
+- Reference Images in text or on character/location sheets.
+- Split editor with synchronized scrolling or WYSIWYG preview.
+- Easy setup (Single container)
+- Optional OAuth authentication with OpenID Connect.
+- Some screenplay niceties like autocomplete.
+- Export to PDF or Fountain text file.
 
 ## Run
 
+> [!IMPORTANT]
+> Screenwriter *should* keep your data safe, but I made this in like 4 hours late at night, so please back up your data by exporting to Fountain occasionally. If you find a bug, please report it in [Issues](https://github.com/AnnikenYT/screenwriter/issues).
+
 ```sh
-docker compose up -d
+docker run -d --name screenwriter \
+  -p 3000:3000 \
+  -v screenplay-data:/data \
+  -e PUBLIC_URL=https://screenwriter.yourdomain.com \
+  ghcr.io/annikenyt/screenwriter:latest
 ```
 
-- Open **http://localhost:3000**.
-- Image: `ghcr.io/annikenyt/screenwriter:latest`.
-- Private packages require `docker login ghcr.io` before pulling.
-- Install via your browser’s app menu; on iOS, Safari → Share → Add to Home Screen. Requires HTTPS.
-- Copy `.env.example` to `.env` for configuration; all settings are environment variables.
-- Data is persisted in the `screenplay-data` volume.
-- Build locally instead: `docker compose up --build -d`.
+`PUBLIC_URL` must be set to the exact browser-facing origin, including scheme and port. Screenwriter was initially meant to only run behind an authenticating reverse proxy, so by default it has no authentication. See **Authentication** below for optional OAuth.
+
+For all other configuration options, see [`.env.example`](.env.example).
 
 ## Authentication
 
@@ -49,14 +53,6 @@ docker compose up -d
 
 ## Deployment notes
 
-- Use one replica, at the origin root, behind HTTPS for remote access.
-- Set `PUBLIC_URL` to the exact browser-facing origin; forward WebSockets for `/collaboration/`.
-- Bind is localhost-only by default; set `BIND_ADDRESS` to expose another interface.
-- Back up the entire data volume consistently, preferably with the container stopped.
-- Versions/uploads are retained indefinitely; monitor disk usage.
-- No persistent offline document storage: keep disconnected tabs open, or use **Download draft** to save proposed writing as Fountain (not comments/images).
-- Archive/delete affects everyone. Archived screenplays must be restored to edit; deleted sheets stay hidden from discovery. Saved versions can restore older sheets; deleting a screenplay also deletes its versions and uploaded images.
-- Same sheet field edited simultaneously: last writer wins.
 - PDF: Courier is not full-Unicode; no automatic continuation cues; long title metadata is clipped.
 - Health check: `/api/health`. Limits and other settings: [`.env.example`](.env.example).
 
@@ -69,8 +65,10 @@ PUBLIC_URL=http://localhost:5173 npm run dev
 
 - Requires Node **24+**; open **http://localhost:5173**.
 - Tests: `npx playwright install chromium`, then `npm run verify`.
-- Shortcuts: Ctrl/⌘ **B/I/U** bold/italic/underline · **Shift K** image · **F** search · **Z** undo · **Shift Z** redo · **Alt M** comment.
-- Select text and type `*`, `_`, or `[` to surround it; press Tab to complete a name.
+
+## To-Do
+- [ ] Offline support
+- [ ] Themes?
 
 ## License
 
