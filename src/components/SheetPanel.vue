@@ -6,15 +6,22 @@ import { ImagePlus, ArrowLeft, X, MapPin, UserRound } from 'lucide-vue-next'
 import { api } from '../lib/api.js'
 import { renameSheet, readSheet, sheetFieldKey } from '../lib/collaboration.js'
 import { characterName, locationName } from '../../shared/fountain.js'
+import { changeSheetStatus } from '../../shared/entities.js'
 const props = defineProps({ doc: Object, documentId: String, kind: String, revision: Number, blocks: Array })
 const emit = defineEmits(['error', 'jump'])
 const selectedId = ref(null)
 const filter = ref('')
 const editing = ref('notes')
 const uploading = ref(false)
+const archived = ref(false)
 const map = computed(() => props.doc.getMap(props.kind))
-const sheets = computed(() => { void props.revision; return [...map.value.values()].map(sheet => readSheet(props.doc, props.kind, sheet)).sort((a, b) => a.name.localeCompare(b.name)).filter(s => s.name.toLowerCase().includes(filter.value.toLowerCase())) })
-const selected = computed(() => { void props.revision; return selectedId.value ? readSheet(props.doc, props.kind, map.value.get(selectedId.value)) : null })
+const sheets = computed(() => { void props.revision; return [...map.value.values()].filter(s => archived.value ? s.status === 'archived' : !s.status || s.status === 'active').map(sheet => readSheet(props.doc, props.kind, sheet)).sort((a, b) => a.name.localeCompare(b.name)).filter(s => s.name.toLowerCase().includes(filter.value.toLowerCase())) })
+const selected = computed(() => { void props.revision; const sheet = map.value.get(selectedId.value); return sheet && sheet.status !== 'deleted' ? readSheet(props.doc, props.kind, sheet) : null })
+function lifecycle(status) {
+  if (status === 'deleted' && !window.confirm(`Delete “${selected.value.name}” and its sheet notes and moodboard? Screenplay text is unchanged. Older saved versions may still contain this sheet.`)) return
+  try { changeSheetStatus(props.doc, props.kind, selectedId.value, status); selectedId.value = null }
+  catch (error) { emit('error', error.message) }
+}
 const related = computed(() => !selected.value ? [] : props.blocks.filter(b => b.type === (props.kind === 'characters' ? 'character' : 'scene') && (props.kind === 'characters' ? characterName(b.text) : locationName(b.text)).toUpperCase() === selected.value.name.toUpperCase()))
 function update(field, value) {
   const current = map.value.get(selectedId.value)
@@ -45,16 +52,24 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
   <section class="sheet-panel panel-body">
     <template v-if="!selected">
       <p class="panel-intro">Created automatically from {{ kind === 'characters' ? 'speaking characters' : 'scene headings' }}. Always linked to your screenplay.</p>
+      <div class="segmented lifecycle-tabs"><button :class="{ active: !archived }" @click="archived = false">Active</button><button :class="{ active: archived }" @click="archived = true">Archived</button></div>
       <input v-model="filter" class="search-input" :placeholder="`Find ${kind === 'characters' ? 'a character' : 'a location'}…`" :aria-label="`Search ${kind}`" />
       <button v-for="sheet in sheets" :key="sheet.id" class="sheet-list-item" @click="selectedId = sheet.id">
         <span class="sheet-initial"><UserRound v-if="kind === 'characters'" :size="17" /><MapPin v-else :size="17" /></span>
         <span><strong>{{ sheet.name }}</strong><small>{{ sheet.tagline || (kind === 'characters' ? 'Character sheet' : 'Location sheet') }}</small></span>
         <span class="arrow">›</span>
       </button>
-      <div v-if="!sheets.length" class="empty-state">Write {{ kind === 'characters' ? 'a character cue and dialogue' : 'a scene heading' }} to create your first sheet.</div>
+      <div v-if="!sheets.length" class="empty-state">{{ archived ? 'No archived sheets.' : 'No active sheets. Write a new name in the screenplay to discover a sheet.' }}</div>
     </template>
     <template v-else>
       <button class="text-button back-link" @click="selectedId = null"><ArrowLeft :size="14" /> All {{ kind }}</button>
+      <div class="lifecycle-actions">
+        <button v-if="selected.status === 'archived'" class="text-button" @click="lifecycle('active')">Restore sheet</button>
+        <button v-else class="text-button" @click="lifecycle('archived')">Archive sheet</button>
+        <button class="text-button danger-button" @click="lifecycle('deleted')">Delete sheet</button>
+      </div>
+      <p v-if="selected.status === 'archived'" class="field-hint">Archived — notes and images are kept. Restore to edit.</p>
+      <fieldset :disabled="selected.status === 'archived'" class="sheet-fields">
       <label class="field-label">Name<input :value="selected.name" class="sheet-name" @change="rename" /></label>
       <p class="field-hint">Renaming updates references throughout the screenplay and notes.</p>
       <label v-if="kind === 'characters'" class="field-label">Age<input :value="selected.age" placeholder="e.g. Early 30s" @input="update('age', $event.target.value)" /></label>
@@ -74,6 +89,7 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
       </div>
       <div class="field-heading">In the screenplay <span class="count">{{ related.length }}</span></div>
       <button v-for="block in related" :key="block.from" class="reference-link" @click="emit('jump', block.from)">Line {{ block.startLine }} <span>{{ block.text }}</span></button>
+      </fieldset>
     </template>
   </section>
 </template>

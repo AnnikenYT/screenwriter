@@ -51,6 +51,9 @@ export function createWorkspace(options = {}) {
     CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,user TEXT NOT NULL,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS images(id TEXT PRIMARY KEY,document_id TEXT NOT NULL REFERENCES documents(id),filename TEXT UNIQUE NOT NULL,mime TEXT NOT NULL);
   `);
+  if (!db.prepare('PRAGMA table_info(documents)').all().some(column => column.name === 'archived_at')) {
+    db.exec('ALTER TABLE documents ADD COLUMN archived_at INTEGER');
+  }
   const appendUpdate = db.prepare('INSERT INTO document_updates(document_id,state) VALUES(?,?)');
   const updateMetadata = db.prepare('UPDATE documents SET title=?,updated_at=? WHERE id=?');
   const selectUpdates = db.prepare('SELECT state FROM document_updates WHERE document_id=? ORDER BY sequence');
@@ -232,6 +235,9 @@ export function createWorkspace(options = {}) {
   }
   function getDocument(id) {
     if (!uuidPattern.test(id)) throw fail(404, 'Document not found');
+    const lifecycle = db.prepare('SELECT archived_at FROM documents WHERE id=?').get(id);
+    if (!lifecycle) throw fail(404, 'Document not found');
+    if (lifecycle.archived_at) throw fail(409, 'Screenplay is archived. Restore it before opening.');
     if (documents.has(id)) return documents.get(id);
     const row = db.prepare('SELECT state FROM documents WHERE id=?').get(id);
     if (!row) throw fail(404, 'Document not found');
@@ -354,7 +360,47 @@ export function createWorkspace(options = {}) {
     if (!row) throw fail(404, 'Version not found');
     return row;
   }
-  app.get('/api/documents', (req, res) => res.json(db.prepare('SELECT id,title,updated_at AS updatedAt FROM documents ORDER BY updated_at DESC').all()));
+  function documentRecord(id) {
+    const row = db.prepare('SELECT id,title,updated_at AS updatedAt,archived_at AS archivedAt FROM documents WHERE id=?').get(id);
+    if (!row) throw fail(404, 'Document not found');
+    return row;
+  }
+  function closeRoom(id, reason) {
+    const entry = documents.get(id);
+    if (!entry) return;
+    documents.delete(id);
+    clearTimeout(entry.reconcileTimer);
+    for (const ws of entry.clients.keys()) ws.close(4004, reason);
+    entry.awareness.destroy();
+    entry.doc.destroy();
+  }
+  app.get('/api/documents', (req, res) => res.json(db.prepare(`SELECT id,title,updated_at AS updatedAt,archived_at AS archivedAt FROM documents WHERE archived_at IS ${req.query.archived === 'true' ? 'NOT NULL' : 'NULL'} ORDER BY updated_at DESC`).all()));
+  app.get('/api/documents/:id', (req, res) => res.json(documentRecord(req.params.id)));
+  app.patch('/api/documents/:id', (req, res) => {
+    const { id } = req.params;
+    documentRecord(id);
+    if (typeof req.body?.archived !== 'boolean') throw fail(400, 'archived must be a boolean');
+    db.prepare('UPDATE documents SET archived_at=? WHERE id=?').run(req.body.archived ? Date.now() : null, id);
+    if (req.body.archived) closeRoom(id, 'Screenplay archived');
+    res.json(documentRecord(id));
+  });
+  app.delete('/api/documents/:id', (req, res) => {
+    const { id } = req.params;
+    documentRecord(id);
+    const files = db.prepare('SELECT filename FROM images WHERE document_id=?').all(id);
+    transaction(() => {
+      db.prepare('DELETE FROM versions WHERE document_id=?').run(id);
+      deleteUpdates.run(id);
+      db.prepare('DELETE FROM images WHERE document_id=?').run(id);
+      db.prepare('DELETE FROM documents WHERE id=?').run(id);
+    });
+    closeRoom(id, 'Screenplay deleted');
+    for (const { filename } of files) {
+      try { unlinkSync(path.join(dataDir, 'uploads', filename)); }
+      catch (error) { if (error.code !== 'ENOENT') console.error('Deleted image cleanup failed:', filename, error.message); }
+    }
+    res.json({ ok: true });
+  });
   app.post('/api/documents', (req, res) => {
     const title = String(req.body?.title || 'Untitled screenplay').slice(0, 200);
     const text = req.body?.text ?? '';
@@ -363,7 +409,7 @@ export function createWorkspace(options = {}) {
     doc.getText('screenplay').insert(0, text);
     doc.getMap('meta').set('title', title);
     reconcileSheets(doc);
-    db.prepare('INSERT INTO documents VALUES(?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now());
+    db.prepare('INSERT INTO documents(id,title,state,updated_at) VALUES(?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now());
     doc.destroy();
     res.status(201).json({ id, title });
   });

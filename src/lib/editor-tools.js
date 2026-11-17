@@ -53,7 +53,7 @@ export function nameCompletions(doc, state, position) {
   const kind = location ? 'locations' : 'characters'
   const prefix = match[1]
   if (!prefix.trim()) return null
-  const names = new Set([...doc.getMap(kind).values()].map(sheet => sheet.name))
+  const names = new Set([...doc.getMap(kind).values()].filter(sheet => !sheet.status || sheet.status === 'active').map(sheet => sheet.name))
   // Include newly typed names before the server's settled-sheet reconciliation.
   for (const block of state.field(parsedFountain, false) || parseFountain(state.doc.toString())) {
     if (block.type === (location ? 'scene' : 'character')) names.add(location ? locationName(block.text) : characterName(block.text))

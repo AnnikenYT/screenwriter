@@ -10,6 +10,7 @@
 - Split view: highlighted source, live preview, and two-way synchronized scrolling.
 - Live collaboration, line-side comment bubbles, replies, and inline edit suggestions with hover-to-review.
 - Automatic character/location sheets, unused-sheet cleanup, Markdown fields, and image moodboards.
+- Archive, restore, or delete screenplays from **Manage screenplays**; sheets have Active/Archived views and confirmed deletion without changing screenplay text.
 - Rename characters/locations across screenplay text, scratchpad, and sheet notes.
 - Shared Markdown scratchpad with preview.
 - Tab completion for character/location names; linked passage images on hover.
@@ -51,6 +52,7 @@ docker compose up -d
 - Back up the entire data volume consistently, preferably with the container stopped.
 - Versions/uploads are retained indefinitely; monitor disk usage.
 - No persistent offline document storage: keep disconnected tabs open, or use **Download draft** to save proposed writing as Fountain (not comments/images).
+- Archive/delete affects everyone. Archived screenplays must be restored to edit; deleted sheets stay hidden from discovery. Saved versions can restore older sheets; deleting a screenplay also deletes its versions and uploaded images.
 - Same sheet field edited simultaneously: last writer wins.
 - PDF: Courier is not full-Unicode; no automatic continuation cues; long title metadata is clipped.
 - Health check: `/api/health`. Limits and other settings: [`.env.example`](.env.example).

@@ -6,7 +6,9 @@ export async function api(path, options = {}) {
   })
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}))
-    throw new Error(detail.error || `Request failed (${response.status})`)
+    const error = new Error(detail.error || `Request failed (${response.status})`)
+    error.status = response.status
+    throw error
   }
   return response.status === 204 ? null : response.json()
 }

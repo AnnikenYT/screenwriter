@@ -9,6 +9,7 @@ import VersionPanel from './components/VersionPanel.vue'
 import InlineComments from './components/InlineComments.vue'
 import ImageLinkDialog from './components/ImageLinkDialog.vue'
 import MobileNamePicker from './components/MobileNamePicker.vue'
+import DocumentManager from './components/DocumentManager.vue'
 import { connect } from './lib/collaboration.js'
 import { api, download } from './lib/api.js'
 import { parseFountain } from '../shared/fountain.js'
@@ -35,6 +36,8 @@ watch(theme, value => {
 const loading = ref(true)
 const error = ref('')
 const documents = ref([])
+const managerOpen = ref(false)
+const roomUnavailable = ref(false)
 const currentId = ref('')
 const connection = shallowRef(null)
 const revision = ref(0)
@@ -115,13 +118,18 @@ function cleanup() {
   }
 }
 async function openDocument(id) {
-  if (id === currentId.value && connection.value) { filesOpen.value = false; return }
+  if (id === currentId.value && connection.value && !roomUnavailable.value) { filesOpen.value = false; return }
   if (!navigator.onLine) { notify('Reconnect before switching documents. Your current writing is still in this tab.'); return }
   if (dirtyOffline.value) { notify('Reconnect before switching documents, or download your Fountain file to preserve unsynced changes.'); return }
+  try {
+    const record = await api(`/api/documents/${id}`)
+    if (record.archivedAt) return notify('This screenplay is archived. Restore it from Manage screenplays.')
+  } catch (error) { return notify(error.message) }
   generation++
   cleanup()
   currentId.value = id
   synced.value = false
+  roomUnavailable.value = false
   status.value = 'connecting'
   source.value = ''; displaySource.value = ''; blocks.value = []; peers.value = []; geometry.value = null; namePicker.value = null
   const current = connect(id, session.value.user)
@@ -170,6 +178,20 @@ async function openDocument(id) {
     status.value = event.status
   })
   current.provider.on('connection-error', () => { if (!synced.value) error.value = 'Unable to connect. Check the server or sign in again.' })
+  current.provider.on('connection-close', event => {
+    if (token !== generation) return
+    const unavailable = message => {
+      if (token !== generation) return
+      roomUnavailable.value = true
+      namePicker.value = null
+      imageLinkOpen.value = false
+      current.provider.disconnect()
+      notify(`${message}. You can download this tab’s draft or choose another screenplay.`)
+      refreshDocuments().catch(error => notify(error.message))
+    }
+    if (event?.code === 4004) unavailable(event.reason)
+    else if (navigator.onLine) api(`/api/documents/${id}`).then(record => { if (record.archivedAt) unavailable('Screenplay archived') }).catch(error => { if (error.status === 404) unavailable('Screenplay deleted') })
+  })
   const updatePeers = () => { peers.value = [...current.provider.awareness.getStates()].filter(([client]) => client !== current.doc.clientID).map(([, state]) => state.user).filter(Boolean) }
   current.provider.awareness.on('change', updatePeers)
   const url = new URL(location.href)
@@ -195,6 +217,7 @@ async function importFile(event) {
   finally { event.target.value = '' }
 }
 function renameTitle() {
+  if (roomUnavailable.value) return
   const title = titleInput.value.trim().slice(0, 200) || 'Untitled screenplay'
   connection.value.doc.getMap('meta').set('title', title)
   titleInput.value = title
@@ -267,9 +290,29 @@ async function updateApp() {
     await applyPwaUpdate()
   } catch (error) { notify(error.message || 'The app could not update. This tab was kept open.'); appUpdating.value = false }
 }
-function resume() { if (document.visibilityState === 'visible' && navigator.onLine) connection.value?.provider.connect() }
+function resume() { if (!roomUnavailable.value && document.visibilityState === 'visible' && navigator.onLine) connection.value?.provider.connect() }
 function networkOffline() { connection.value?.provider.disconnect() }
-function networkOnline() { connection.value?.provider.connect() }
+function networkOnline() { if (!roomUnavailable.value) connection.value?.provider.connect() }
+async function documentChanged(id, action) {
+  await refreshDocuments()
+  if (id === currentId.value && action !== 'restore') {
+    roomUnavailable.value = true
+    connection.value?.provider.disconnect()
+  }
+}
+async function manageOpen(id) {
+  if (roomUnavailable.value && dirtyOffline.value) {
+    if (!window.confirm('Leave this stopped room? Download your draft first if you need to keep unsynced writing.')) return
+    dirtyOffline.value = false
+  }
+  await openDocument(id)
+  managerOpen.value = false
+}
+async function beforeDocumentChange(id, action) {
+  if (id !== currentId.value || !connection.value || roomUnavailable.value || action === 'restore') return
+  if (dirtyOffline.value) throw new Error('Reconnect and save your edits before archiving or deleting.')
+  await flushCollaboration(connection.value.provider, connection.value.doc)
+}
 function syncScroll(origin, position) {
   if (origin === 'source') sourceScrollPosition = position
   if (mobile.value) return
@@ -332,10 +375,10 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
           <div v-if="filesOpen" class="dropdown document-dropdown">
             <div class="dropdown-label">DOCUMENTS</div>
             <button v-for="doc in documents" :key="doc.id" :class="{ selected: doc.id === currentId }" @click="openDocument(doc.id)"><FileText :size="15" /><span>{{ doc.id === currentId ? titleInput : doc.title }}</span><Check v-if="doc.id === currentId" :size="14" /></button>
-            <div class="menu-divider" /><button @click="createDocument()"><Plus :size="15" />New screenplay</button><button @click="importInput.click()"><Upload :size="15" />Import Fountain</button>
+            <div class="menu-divider" /><button @click="managerOpen = true; filesOpen = false">Manage screenplays</button><button @click="createDocument()"><Plus :size="15" />New screenplay</button><button @click="importInput.click()"><Upload :size="15" />Import Fountain</button>
           </div>
         </div>
-        <input v-model="titleInput" class="document-title" aria-label="Document title" maxlength="200" :disabled="!synced" @change="renameTitle" @keydown.enter="$event.target.blur()" />
+        <input v-model="titleInput" class="document-title" aria-label="Document title" maxlength="200" :disabled="!synced || roomUnavailable" @change="renameTitle" @keydown.enter="$event.target.blur()" />
       </div>
       <div v-if="!mobile" class="toolbar-center">
         <div class="segmented mode-switch" aria-label="Editor mode"><button :class="{ active: mode === 'live' }" title="Live formatted editor" @click="setMode('live')"><AlignLeft :size="14" /><span>Live</span></button><button :class="{ active: mode === 'split' }" title="Raw Fountain and rendered preview" @click="setMode('split')"><Columns2 :size="14" /><span>Split</span></button></div>
@@ -357,7 +400,8 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       <button v-if="keyboardOpen" class="mobile-hide-keyboard" aria-label="Hide keyboard" @click="hideKeyboard"><Keyboard :size="19" /></button>
     </nav>
     <div v-if="mobile && synced && (status !== 'connected' || dirtyOffline)" class="mobile-offline-notice" role="status"><span>{{ status === 'connected' ? 'Syncing edits · keep this tab open.' : 'Reconnecting · keep this tab open. Unsent edits aren’t stored offline.' }}</span><button @click="downloadDraft">Download draft</button></div>
-    <div class="workspace-body">
+    <div v-if="roomUnavailable" class="room-unavailable" role="status"><span>This screenplay is archived or deleted. Editing has stopped.</span><button class="text-button" @click="downloadDraft">Download draft</button><button class="text-button" @click="managerOpen = true">Manage screenplays</button></div>
+    <div class="workspace-body" :inert="roomUnavailable">
       <div v-if="mobile && sidebar" class="mobile-tools-scrim" @click="closeTools" />
       <div :class="['workspace-tools', { 'mobile-tools-open': mobile && sidebar }]" :role="mobile && sidebar ? 'dialog' : undefined" :aria-modal="mobile && sidebar ? 'true' : undefined" :aria-label="mobile && sidebar ? 'Workspace tools' : undefined">
       <header v-if="mobile && sidebar" class="mobile-tools-heading"><h2>Tools</h2><button class="icon-button" aria-label="Close tools" @click="closeTools"><X :size="20" /></button></header>
@@ -446,4 +490,5 @@ I wasn't sure you would.</pre></dd><dt>Force an element</dt><dd><code>.A SCENE</
   </Teleport>
   <ImageLinkDialog v-if="imageLinkOpen && connection" :doc="connection.doc" :document-id="currentId" :selection="selection" :user="session.user" @close="imageLinkOpen = false" @error="notify" />
   <MobileNamePicker v-if="namePicker && connection" :doc="connection.doc" :revision="revision" :blocks="displayBlocks" :kind="namePicker" @select="chooseName" @close="namePicker = null; editor?.focus()" />
+  <DocumentManager v-if="managerOpen" :before-change="beforeDocumentChange" @close="managerOpen = false" @changed="documentChanged" @open="manageOpen" @error="notify" />
 </template>

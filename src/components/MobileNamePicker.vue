@@ -9,7 +9,7 @@ const input = ref(null)
 const character = computed(() => props.kind === 'characters')
 const names = computed(() => {
   void props.revision
-  const known = new Set([...props.doc.getMap(props.kind).values()].map(s => s.name))
+  const known = new Set([...props.doc.getMap(props.kind).values()].filter(s => !s.status || s.status === 'active').map(s => s.name))
   for (const block of props.blocks) if (block.type === (character.value ? 'character' : 'scene')) known.add(character.value ? characterName(block.text) : locationName(block.text))
   return [...known].filter(Boolean).filter(name => name.toLowerCase().includes(query.value.toLowerCase())).sort()
 })

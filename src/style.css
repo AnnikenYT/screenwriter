@@ -30,6 +30,15 @@ code, pre { font-family: var(--mono); }
 button, input, textarea { transition: background-color .12s, border-color .12s; }
 .workspace { height: 100dvh; min-height: 300px; display: flex; flex-direction: column; overflow: hidden; }
 .workspace-tools { display: contents; }
+.sheet-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.lifecycle-tabs { margin-bottom: 14px; }
+.lifecycle-actions { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0; }
+.lifecycle-actions button { min-height: 44px; }
+.danger-button { color: #b44b44 !important; }
+.document-manager { width: 540px; }
+.document-management-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.document-management-row strong { overflow-wrap: anywhere; font-weight: 500; }
+.room-unavailable { padding: 10px 14px; background: var(--accent-light); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; }
 .touch-popover-close { display: none; }
 .topbar { height: 65px; min-height: 65px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fbfbf8; border-bottom: 1px solid var(--line); padding: 0 23px 0 14px; position: relative; z-index: 20; }
 .document-controls { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }

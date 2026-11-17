@@ -1,0 +1,80 @@
+import { test, expect } from '@playwright/test'
+
+const source = 'INT. ROOM - DAY\n\nMARA\nHello.\n'
+async function open(page, request, title) {
+  const response = await request.post('/api/documents', { data: { title, text: source } })
+  const document = await response.json()
+  await page.goto(`/?document=${document.id}`)
+  await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toBeVisible()
+  return document
+}
+
+test('screenplays can be archived, restored and deleted, stopping other open writers', async ({ page, context, request }) => {
+  const title = `Lifecycle ${Date.now()}`
+  const document = await open(page, request, title)
+  const other = await context.newPage()
+  await other.goto(`/?document=${document.id}`)
+  await expect(other.getByRole('textbox', { name: 'Screenplay editor' })).toBeVisible()
+  await page.getByRole('button', { name: 'Open documents', exact: true }).click()
+  await page.getByRole('button', { name: 'Manage screenplays', exact: true }).click()
+  const manager = page.getByRole('dialog', { name: 'Manage screenplays' })
+  const row = manager.locator('.document-management-row').filter({ hasText: title })
+  page.once('dialog', dialog => dialog.accept())
+  await row.getByRole('button', { name: 'Archive', exact: true }).click()
+  await expect(row).toHaveCount(0)
+  await expect(other.locator('.room-unavailable')).toBeVisible()
+  await manager.getByRole('button', { name: 'Archived', exact: true }).click()
+  await row.getByRole('button', { name: 'Restore', exact: true }).click()
+  await expect(row).toHaveCount(0)
+  await manager.getByRole('button', { name: 'Active', exact: true }).click()
+  await row.getByRole('button', { name: 'Open', exact: true }).click()
+  await expect(page.locator('.room-unavailable')).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toContainText('Hello.')
+  await page.getByRole('button', { name: 'Open documents', exact: true }).click()
+  await page.getByRole('button', { name: 'Manage screenplays', exact: true }).click()
+  page.once('dialog', dialog => dialog.dismiss())
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row).toBeVisible()
+  page.once('dialog', dialog => dialog.accept())
+  await row.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(row).toHaveCount(0)
+  expect((await request.get(`/api/documents/${document.id}`)).status()).toBe(404)
+  await other.close()
+})
+
+for (const mobile of [false, true]) {
+  test(`character and location sheets archive, restore and stay deleted${mobile ? ' on phone' : ''}`, async ({ page, request }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 })
+    const document = await open(page, request, `Sheets ${mobile}`)
+    if (mobile) await page.getByRole('button', { name: 'Open tools', exact: true }).click()
+    for (const [kind, name] of [['Characters', 'MARA'], ['Locations', 'ROOM']]) {
+      await page.getByRole('button', { name: kind, exact: true }).click()
+      const panel = page.locator('.sheet-panel')
+      await panel.getByRole('button', { name: `${name} ${kind === 'Characters' ? 'Character' : 'Location'} sheet` }).click()
+      await panel.locator('#sheet-notes').fill(`Notes for ${name}`)
+      await panel.getByRole('button', { name: 'Archive sheet', exact: true }).click()
+      await expect(panel.locator('.sheet-list-item')).toHaveCount(0)
+      await panel.getByRole('button', { name: 'Archived', exact: true }).click()
+      await panel.locator('.sheet-list-item').click()
+      await expect(panel.locator('#sheet-notes')).toHaveValue(`Notes for ${name}`)
+      await panel.getByRole('button', { name: 'Restore sheet', exact: true }).click()
+      await panel.getByRole('button', { name: 'Active', exact: true }).click()
+      await panel.locator('.sheet-list-item').click()
+      page.once('dialog', dialog => dialog.accept())
+      await panel.getByRole('button', { name: 'Delete sheet', exact: true }).click()
+      await expect(panel.locator('.sheet-list-item')).toHaveCount(0)
+    }
+    if (mobile) await page.getByRole('button', { name: 'Close tools', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Screenplay editor' }).focus()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.insertText('\n\nA new beat.')
+    await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toContainText('A new beat.')
+    await page.reload()
+    await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toContainText('Hello.')
+    await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toContainText('A new beat.')
+    if (mobile) await page.getByRole('button', { name: 'Open tools', exact: true }).click()
+    await page.getByRole('button', { name: 'Characters', exact: true }).click()
+    await expect(page.locator('.sheet-list-item')).toHaveCount(0)
+    expect((await request.get(`/api/documents/${document.id}/export.pdf`)).status()).toBe(200)
+  })
+}
