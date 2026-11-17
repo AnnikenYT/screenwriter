@@ -6,7 +6,10 @@ import { reconcileSheets } from '../../shared/entities.js'
 export function connect(id, user) {
   const doc = new Y.Doc()
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const provider = new WebsocketProvider(`${protocol}//${location.host}/collaboration`, id, doc)
+  // Keep the server authoritative for both data and awareness round trips.
+  // Cross-tab BroadcastChannel relays could otherwise acknowledge another
+  // tab's presence marker before this socket's edits have reached the server.
+  const provider = new WebsocketProvider(`${protocol}//${location.host}/collaboration`, id, doc, { disableBc: true })
   provider.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: `${user.color}25` })
   return { doc, provider, text: doc.getText('screenplay'), scratchpad: doc.getText('scratchpad') }
 }

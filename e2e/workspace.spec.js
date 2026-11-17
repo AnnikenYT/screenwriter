@@ -157,6 +157,7 @@ test('mobile editor and sidebar fit without horizontal page overflow', async ({ 
   await open(page, request)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   await expect(screenplay(page)).toBeVisible()
+  await page.getByRole('button', { name: 'Open tools', exact: true }).click()
   await page.getByRole('button', { name: 'Characters', exact: true }).click()
   await expect(page.getByRole('button', { name: 'MARA Character sheet' })).toBeVisible()
   await page.screenshot({ path: '/tmp/opencode/screenplay-mobile.png', fullPage: true })

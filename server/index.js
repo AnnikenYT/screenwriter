@@ -66,6 +66,7 @@ export function createWorkspace(options = {}) {
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    if (/^\/(?:api|auth|uploads|collaboration)(?:\/|$)/.test(req.path)) res.setHeader('Cache-Control', 'no-store');
     next();
   });
   function session(req) {
@@ -101,7 +102,8 @@ export function createWorkspace(options = {}) {
   app.use((req, res, next) => {
     req.user = session(req);
     req.sessionKey = sessionKey(req);
-    if (!req.user && authMode === 'none') {
+    const publicAsset = ['GET', 'HEAD'].includes(req.method) && /^\/(?:assets\/|icons\/|sw\.js$|offline\.html$|manifest\.webmanifest$)/.test(req.path);
+    if (!req.user && authMode === 'none' && !publicAsset) {
       req.user = { id: randomUUID(), name: `Writer ${randomBytes(2).toString('hex')}`, color: ['#c2410c', '#2563eb', '#7c3aed', '#047857'][randomBytes(1)[0] % 4] };
       req.sessionKey = setSession(res, req.user);
     }
@@ -524,9 +526,23 @@ export function createWorkspace(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
     next();
   });
-  app.use(express.static(path.join(sourceRoot, 'dist'), { index: false }));
+  app.get('/sw.js', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.type('application/javascript').sendFile('sw.js', { root: path.join(sourceRoot, 'dist') }, error => {
+      if (error) next(error);
+    });
+  });
+  app.use(express.static(path.join(sourceRoot, 'dist'), {
+    index: false,
+    setHeaders(res, filename) {
+      if (filename.endsWith('.webmanifest')) res.setHeader('Content-Type', 'application/manifest+json');
+      if (filename.endsWith('index.html') || filename.endsWith('offline.html')) res.setHeader('Cache-Control', 'no-store');
+    },
+  }));
   app.get('/{*path}', (req, res, next) => {
     if (req.path.startsWith('/uploads') || req.path.startsWith('/auth') || req.path.startsWith('/collaboration')) return next(fail(404, 'Not found'));
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile('index.html', { root: path.join(sourceRoot, 'dist') });
   });
   app.use((error, req, res, next) => {

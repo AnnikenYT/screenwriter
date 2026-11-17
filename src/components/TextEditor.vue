@@ -10,7 +10,8 @@ import { Check, X } from 'lucide-vue-next'
 import * as Y from 'yjs'
 import { fountainFormatting } from '../lib/fountain-editor.js'
 import { createScreenplayBinding } from '../lib/screenplay-binding.js'
-import { screenplayTools, wrapSelection } from '../lib/editor-tools.js'
+import { screenplayTools, wrapSelection, completeName, insertScreenplayName, insertParenthetical } from '../lib/editor-tools.js'
+import { viewportBounds } from '../lib/mobile.js'
 
 const props = defineProps({
   ytext: { type: Object, required: true },
@@ -42,8 +43,8 @@ function showHover(suggestion, bounds) {
   hovered.value = suggestion
   hoveredImage.value = null
   hoverStyle.value = {
-    left: `${Math.max(8, Math.min(bounds.left, window.innerWidth - 278))}px`,
-    top: `${Math.min(window.innerHeight - 150, bounds.bottom + 9)}px`,
+    left: `${Math.max(8, Math.min(bounds.left, viewportBounds().width - 278))}px`,
+    top: `${Math.max(viewportBounds().top + 8, Math.min(viewportBounds().bottom - 150, bounds.bottom + 9))}px`,
   }
 }
 function showImage(link, bounds) {
@@ -51,7 +52,8 @@ function showImage(link, bounds) {
   clearTimeout(hoverTimer)
   hovered.value = null
   hoveredImage.value = link
-  hoverStyle.value = { left: `${Math.max(8, Math.min(bounds.left, window.innerWidth - 298))}px`, top: `${Math.max(60, Math.min(window.innerHeight - 330, bounds.bottom + 9))}px` }
+  const viewport = viewportBounds()
+  hoverStyle.value = { left: `${Math.max(8, Math.min(bounds.left, viewport.width - 298))}px`, top: `${Math.max(viewport.top + 8, Math.min(viewport.bottom - 330, bounds.bottom + 9))}px` }
 }
 function unlinkImage() { props.ytext.doc.getMap('meta').delete(`image-link:${hoveredImage.value.id}`); hoveredImage.value = null }
 function measure() {
@@ -165,6 +167,8 @@ function goToAnnotation(annotation) {
   view.focus()
 }
 function decide(status) { emit('decide', hovered.value, status); hovered.value = null }
+function command(run) { undo?.stopCapturing(); return run() }
+function revealSelection() { if (view) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 26 }) }) }
 watch(() => props.mode, () => { view?.dispatch({ effects: presentation.reconfigure(extensions()) }); measure() })
 watch(() => props.review, value => binding?.setSuggesting(value))
 onBeforeUnmount(() => {
@@ -175,18 +179,27 @@ onBeforeUnmount(() => {
   if (binding) binding.destroy()
   else undo?.destroy()
 })
-defineExpose({ goTo, goToAnnotation, focus: () => view?.focus(), undo: () => undo?.undo(), redo: () => undo?.redo(), getSelection, scrollToPosition, format: delimiter => wrapSelection(view, delimiter, { toggle: true }) })
+defineExpose({
+  goTo, goToAnnotation, focus: () => view?.focus(), blur: () => { hovered.value = null; hoveredImage.value = null; view?.contentDOM.blur() },
+  undo: () => undo?.undo(), redo: () => undo?.redo(), getSelection, scrollToPosition, revealSelection,
+  format: delimiter => command(() => wrapSelection(view, delimiter, { toggle: true })),
+  completeName: () => completeName(view, props.ytext.doc),
+  insertName: (name, kind) => command(() => insertScreenplayName(view, name, kind)),
+  insertParenthetical: () => command(() => insertParenthetical(view)),
+})
 </script>
 
 <template>
   <div ref="host" :class="['text-editor', { 'live-editor': mode === 'live' && !markdown, 'raw-editor': mode === 'split', 'markdown-editor': markdown }]" />
   <Teleport to="body">
     <section v-if="hovered" class="inline-suggestion-popover" :style="hoverStyle" role="dialog" :aria-label="`Suggestion by ${hovered.author}`" @mouseenter="keepHover" @mouseleave="hideHover" @keydown.esc="hovered = null">
+      <button class="icon-button compact touch-popover-close" aria-label="Close suggestion" @click="hovered = null"><X :size="18" /></button>
       <div class="review-byline"><strong>{{ hovered.author }}</strong><span class="small muted">Suggested edit</span></div>
       <p class="small muted">{{ new Date(hovered.createdAt).toLocaleString() }}</p>
       <div class="button-row"><button class="text-button accept" @click="decide('accepted')"><Check :size="14" />Accept suggestion</button><button class="text-button" @click="decide('rejected')"><X :size="14" />Reject suggestion</button></div>
     </section>
     <section v-if="hoveredImage" class="linked-image-popover" :style="hoverStyle" role="dialog" aria-label="Linked image" @mouseenter="keepHover" @mouseleave="hideHover" @keydown.esc="hoveredImage = null">
+      <button class="icon-button compact touch-popover-close" aria-label="Close image preview" @click="hoveredImage = null"><X :size="18" /></button>
       <img :src="hoveredImage.url" :alt="hoveredImage.caption || 'Passage image reference'" referrerpolicy="no-referrer" />
       <p v-if="hoveredImage.caption">{{ hoveredImage.caption }}</p>
       <div class="review-byline"><span class="small muted">{{ hoveredImage.author }}</span><button class="text-button" @click="unlinkImage">Unlink image</button></div>

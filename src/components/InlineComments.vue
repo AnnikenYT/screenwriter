@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { MessageSquarePlus, MessageSquare, X } from 'lucide-vue-next'
 import CommentThread from './CommentThread.vue'
 import { relativeAnchor } from '../lib/collaboration.js'
+import { viewportBounds } from '../lib/mobile.js'
 
 const props = defineProps({ doc: Object, geometry: Object, revision: Number, selection: Object, user: Object })
 const emit = defineEmits(['jump', 'jump-annotation'])
@@ -29,9 +30,10 @@ const expanded = computed(() => !compact.value && (comments.value.length > 0 || 
 const bubbleTop = computed(() => Math.max(6, Math.min((props.geometry?.cursor?.top ?? 10), (props.geometry?.height || 500) - 40)))
 function positionFloating(top = bubbleTop.value) {
   const bounds = host.value.getBoundingClientRect()
+  const viewport = viewportBounds()
   floatingStyle.value = {
-    left: `${Math.max(8, Math.min(bounds.right - 252, window.innerWidth - 260))}px`,
-    top: `${Math.max(70, Math.min(bounds.top + top, window.innerHeight - 320))}px`,
+    left: `${Math.max(8, Math.min(bounds.right - 252, viewport.width - 260))}px`,
+    top: `${Math.max(viewport.top + 8, Math.min(bounds.top + top, viewport.bottom - 320))}px`,
   }
 }
 async function open() {

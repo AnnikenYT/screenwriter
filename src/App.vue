@@ -1,6 +1,6 @@
 <script setup>
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount, nextTick, markRaw, watch } from 'vue'
-import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Moon, Sun } from 'lucide-vue-next'
+import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Moon, Sun, Keyboard, CircleArrowDown, RefreshCw } from 'lucide-vue-next'
 import TextEditor from './components/TextEditor.vue'
 import ScreenplayPreview from './components/ScreenplayPreview.vue'
 import SheetPanel from './components/SheetPanel.vue'
@@ -8,15 +8,30 @@ import ReviewPanel from './components/ReviewPanel.vue'
 import VersionPanel from './components/VersionPanel.vue'
 import InlineComments from './components/InlineComments.vue'
 import ImageLinkDialog from './components/ImageLinkDialog.vue'
+import MobileNamePicker from './components/MobileNamePicker.vue'
 import { connect } from './lib/collaboration.js'
 import { api, download } from './lib/api.js'
 import { parseFountain } from '../shared/fountain.js'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { useMobileLayout } from './lib/mobile.js'
+import { usePwa } from './lib/pwa.js'
+import { flushCollaboration } from './lib/sync-barrier.js'
 
 const session = ref(null)
+const { mobile, keyboardOpen } = useMobileLayout()
+const { installed, updateAvailable, register: registerPwa, install: installPwa, applyUpdate: applyPwaUpdate } = usePwa()
+const mobilePane = ref('write')
+const namePicker = ref(null)
+const installHelpOpen = ref(false)
+const updateHelpOpen = ref(false)
+const appUpdating = ref(false)
 const theme = ref(localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
-watch(theme, value => { document.documentElement.dataset.theme = value; localStorage.setItem('theme', value) }, { immediate: true })
+watch(theme, value => {
+  document.documentElement.dataset.theme = value
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', value === 'dark' ? '#20261d' : '#f6f5f2')
+  localStorage.setItem('theme', value)
+}, { immediate: true })
 const loading = ref(true)
 const error = ref('')
 const documents = ref([])
@@ -38,6 +53,7 @@ const editor = ref(null)
 const preview = ref(null)
 const scrollSync = ref(true)
 let scrollOrigin = null, scrollGeneration = 0
+let sourceScrollPosition = { from: 0, ratio: 0 }
 const review = ref(null)
 const lineComments = ref(null)
 const geometry = ref(null)
@@ -55,7 +71,7 @@ const scratchView = ref('write')
 const importInput = ref(null)
 const titleInput = ref('')
 const dirtyOffline = ref(false)
-let timer, errorTimer
+let timer, errorTimer, pendingFlushTimer
 let generation = 0
 let documentUpdate
 const tabs = [
@@ -90,6 +106,7 @@ async function initialize() {
 }
 function cleanup() {
   clearTimeout(timer)
+  clearTimeout(pendingFlushTimer)
   if (connection.value) {
     connection.value.doc.off('update', documentUpdate)
     connection.value.provider.destroy()
@@ -99,25 +116,44 @@ function cleanup() {
 }
 async function openDocument(id) {
   if (id === currentId.value && connection.value) { filesOpen.value = false; return }
+  if (!navigator.onLine) { notify('Reconnect before switching documents. Your current writing is still in this tab.'); return }
   if (dirtyOffline.value) { notify('Reconnect before switching documents, or download your Fountain file to preserve unsynced changes.'); return }
   generation++
   cleanup()
   currentId.value = id
   synced.value = false
   status.value = 'connecting'
-  source.value = ''; blocks.value = []; peers.value = []
+  source.value = ''; displaySource.value = ''; blocks.value = []; peers.value = []; geometry.value = null; namePicker.value = null
   const current = connect(id, session.value.user)
   connection.value = markRaw(current)
   const token = generation
+  let localVersion = 0, confirming = false
   const refresh = () => {
     if (token !== generation) return
     source.value = current.text.toString()
     blocks.value = parseFountain(source.value)
     titleInput.value = current.doc.getMap('meta').get('title') || 'Untitled screenplay'
   }
+  const confirmPending = async () => {
+    if (token !== generation || confirming || !dirtyOffline.value || status.value !== 'connected' || !current.provider.synced) return
+    confirming = true
+    const version = localVersion
+    try {
+      await flushCollaboration(current.provider, current.doc)
+      if (token === generation && version === localVersion) dirtyOffline.value = false
+    } catch { /* Keep the unsynced warning until the connection can confirm it. */ }
+    finally {
+      confirming = false
+      if (token === generation && dirtyOffline.value && status.value === 'connected') pendingFlushTimer = setTimeout(confirmPending, 250)
+    }
+  }
   documentUpdate = (_update, origin) => {
     revision.value++
-    if (origin !== current.provider && status.value !== 'connected') dirtyOffline.value = true
+    if (origin !== current.provider) {
+      localVersion++
+      if (status.value !== 'connected') dirtyOffline.value = true
+      if (dirtyOffline.value) { clearTimeout(pendingFlushTimer); pendingFlushTimer = setTimeout(confirmPending, 100) }
+    }
     // Coalesce keystrokes; the editor itself updates synchronously.
     clearTimeout(timer)
     timer = setTimeout(refresh, 80)
@@ -125,8 +161,9 @@ async function openDocument(id) {
   current.doc.on('update', documentUpdate)
   current.provider.on('sync', value => {
     if (!value) return
-    synced.value = true; dirtyOffline.value = false
+    synced.value = true
     refresh()
+    confirmPending()
   })
   current.provider.on('status', event => {
     if (token !== generation) return
@@ -193,7 +230,49 @@ function linkImage() {
   if (!selection.value.text) { notify('Select a passage first, then link an image.'); return }
   imageLinkOpen.value = true
 }
+function closeTools() {
+  sidebar.value = false
+  if (mobile.value && mobilePane.value === 'write') nextTick(() => editor.value?.focus())
+}
+function toggleTools() {
+  if (sidebar.value) { closeTools(); return }
+  sidebar.value = true
+  nextTick(() => document.querySelector('.mobile-tools-heading button')?.focus())
+}
+function switchMobilePane(pane) {
+  sidebar.value = false
+  mobilePane.value = pane
+  if (pane === 'preview') { editor.value?.blur(); nextTick(() => preview.value?.scrollToPosition(sourceScrollPosition)) }
+  else nextTick(() => { editor.value?.focus(); editor.value?.revealSelection() })
+}
+function hideKeyboard() { document.activeElement?.blur(); editor.value?.blur() }
+function chooseName(name, kind) { editor.value?.insertName(name, kind); namePicker.value = null }
+function completeName() {
+  if (!editor.value?.completeName()) namePicker.value = 'characters'
+}
+function downloadDraft() { download(displaySource.value || connection.value.text.toString(), `${titleInput.value || 'screenplay'}.draft.fountain`) }
+async function installApp() {
+  try {
+    const result = await installPwa()
+    if (!result.prompted) installHelpOpen.value = true
+  } catch { installHelpOpen.value = true }
+}
+async function updateApp() {
+  if (dirtyOffline.value || (connection.value && status.value !== 'connected')) { notify('Reconnect before updating. Keep this tab open until your edits sync.'); return }
+  appUpdating.value = true
+  document.activeElement?.blur()
+  try {
+    await nextTick()
+    if (connection.value) await flushCollaboration(connection.value.provider, connection.value.doc)
+    await applyPwaUpdate()
+  } catch (error) { notify(error.message || 'The app could not update. This tab was kept open.'); appUpdating.value = false }
+}
+function resume() { if (document.visibilityState === 'visible' && navigator.onLine) connection.value?.provider.connect() }
+function networkOffline() { connection.value?.provider.disconnect() }
+function networkOnline() { connection.value?.provider.connect() }
 function syncScroll(origin, position) {
+  if (origin === 'source') sourceScrollPosition = position
+  if (mobile.value) return
   if (!scrollSync.value || mode.value !== 'split' || (scrollOrigin && scrollOrigin !== origin)) return
   scrollOrigin = origin
   const generation = ++scrollGeneration
@@ -210,14 +289,30 @@ function exportFountain() { download(connection.value.text.toString(), `${titleI
 function closeMenus(event) { if (!event.target.closest('.dropdown-anchor')) { filesOpen.value = false; exportOpen.value = false } }
 function beforeUnload(event) { if (dirtyOffline.value) { event.preventDefault(); event.returnValue = '' } }
 function hotkeys(event) {
-  if (event.key === 'Escape') { helpOpen.value = false; filesOpen.value = false; exportOpen.value = false; profileOpen.value = false; imageLinkOpen.value = false }
+  if (event.key === 'Escape') { helpOpen.value = false; filesOpen.value = false; exportOpen.value = false; profileOpen.value = false; imageLinkOpen.value = false; namePicker.value = null; installHelpOpen.value = false; updateHelpOpen.value = false; if (mobile.value && sidebar.value) closeTools() }
+  if (event.key === 'Tab' && mobile.value && sidebar.value && !profileOpen.value && !imageLinkOpen.value && !helpOpen.value && !installHelpOpen.value && !updateHelpOpen.value) {
+    const tools = document.querySelector('.mobile-tools-open')
+    const controls = tools && [...tools.querySelectorAll('button, input, textarea, select, a[href], [tabindex="0"]')].filter(el => !el.disabled && el.getClientRects().length)
+    if (controls?.length && (!tools.contains(document.activeElement) || (event.shiftKey && document.activeElement === controls[0]) || (!event.shiftKey && document.activeElement === controls.at(-1)))) {
+      event.preventDefault()
+      const target = event.shiftKey ? controls.at(-1) : controls[0]
+      target.focus()
+    }
+  }
 }
+watch(mobile, small => { if (small) sidebar.value = false })
+watch([mobile, sidebar], ([small, open]) => { document.documentElement.dataset.toolsOpen = String(small && open) }, { immediate: true })
+watch(keyboardOpen, () => nextTick(() => { if (!sidebar.value && mobilePane.value === 'write') editor.value?.revealSelection() }))
 onMounted(() => {
   initialize()
+  registerPwa()
   if ('BroadcastChannel' in window) { profileChannel = new BroadcastChannel('screenwriter-profile'); profileChannel.onmessage = event => applyProfile(event.data) }
   document.addEventListener('click', closeMenus); window.addEventListener('beforeunload', beforeUnload); window.addEventListener('keydown', hotkeys)
+  document.addEventListener('visibilitychange', resume)
+  window.addEventListener('offline', networkOffline)
+  window.addEventListener('online', networkOnline)
 })
-onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTimer); document.removeEventListener('click', closeMenus); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('keydown', hotkeys) })
+onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTimer); document.removeEventListener('click', closeMenus); document.removeEventListener('visibilitychange', resume); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('keydown', hotkeys); window.removeEventListener('offline', networkOffline); window.removeEventListener('online', networkOnline) })
 </script>
 
 <template>
@@ -229,7 +324,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
     <p v-if="error" class="error-text">{{ error }}</p>
     <button v-if="!session" class="text-button" @click="initialize">Try again</button>
   </div>
-  <div v-else class="workspace">
+  <div v-else :class="['workspace', { 'is-mobile': mobile, 'keyboard-open': keyboardOpen, 'mobile-preview': mobile && mobilePane === 'preview', 'mobile-writing': mobile && mobilePane === 'write' }]" :inert="appUpdating">
     <header class="topbar">
       <div class="document-controls">
         <div class="dropdown-anchor">
@@ -242,7 +337,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
         </div>
         <input v-model="titleInput" class="document-title" aria-label="Document title" maxlength="200" :disabled="!synced" @change="renameTitle" @keydown.enter="$event.target.blur()" />
       </div>
-      <div class="toolbar-center">
+      <div v-if="!mobile" class="toolbar-center">
         <div class="segmented mode-switch" aria-label="Editor mode"><button :class="{ active: mode === 'live' }" title="Live formatted editor" @click="setMode('live')"><AlignLeft :size="14" /><span>Live</span></button><button :class="{ active: mode === 'split' }" title="Raw Fountain and rendered preview" @click="setMode('split')"><Columns2 :size="14" /><span>Split</span></button></div>
       </div>
       <div class="toolbar-actions">
@@ -255,17 +350,29 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       </div>
     </header>
 
+    <nav v-if="mobile" class="mobile-view-tabs" aria-label="Mobile workspace">
+      <button :class="{ active: mobilePane === 'write' && !sidebar }" :aria-pressed="mobilePane === 'write' && !sidebar" aria-label="Write" :title="reviewMode ? 'Suggesting edits' : 'Write screenplay'" @click="switchMobilePane('write')"><Pencil :size="16" />{{ reviewMode ? 'Suggesting' : 'Write' }}</button>
+      <button :class="{ active: mobilePane === 'preview' && !sidebar }" :aria-pressed="mobilePane === 'preview' && !sidebar" @click="switchMobilePane('preview')"><FileText :size="16" />Preview</button>
+      <button :class="{ active: sidebar }" :aria-expanded="sidebar" aria-label="Open tools" @click="toggleTools"><PanelLeftOpen :size="17" />Tools<span v-if="activeComments" class="mobile-review-count">{{ activeComments }}</span></button>
+      <button v-if="keyboardOpen" class="mobile-hide-keyboard" aria-label="Hide keyboard" @click="hideKeyboard"><Keyboard :size="19" /></button>
+    </nav>
+    <div v-if="mobile && synced && (status !== 'connected' || dirtyOffline)" class="mobile-offline-notice" role="status"><span>{{ status === 'connected' ? 'Syncing edits · keep this tab open.' : 'Reconnecting · keep this tab open. Unsent edits aren’t stored offline.' }}</span><button @click="downloadDraft">Download draft</button></div>
     <div class="workspace-body">
+      <div v-if="mobile && sidebar" class="mobile-tools-scrim" @click="closeTools" />
+      <div :class="['workspace-tools', { 'mobile-tools-open': mobile && sidebar }]" :role="mobile && sidebar ? 'dialog' : undefined" :aria-modal="mobile && sidebar ? 'true' : undefined" :aria-label="mobile && sidebar ? 'Workspace tools' : undefined">
+      <header v-if="mobile && sidebar" class="mobile-tools-heading"><h2>Tools</h2><button class="icon-button" aria-label="Close tools" @click="closeTools"><X :size="20" /></button></header>
       <aside class="tool-rail" aria-label="Workspace tools">
-        <button class="rail-button sidebar-toggle" :aria-label="sidebar ? 'Hide sidebar' : 'Show sidebar'" @click="sidebar = !sidebar"><PanelLeftClose v-if="sidebar" :size="19" /><PanelLeftOpen v-else :size="19" /></button>
-        <button v-for="tab in tabs" :key="tab.id" :class="['rail-button', { active: sidebar && panel === tab.id }]" :title="tab.label" :aria-label="tab.label" :aria-pressed="sidebar && panel === tab.id" @click="sidebar && panel === tab.id ? sidebar = false : selectPanel(tab.id)"><component :is="tab.icon" :size="19" :stroke-width="1.6" /><span v-if="tab.id === 'review' && activeComments" class="rail-dot" /></button>
+        <button v-if="!mobile" class="rail-button sidebar-toggle" :aria-label="sidebar ? 'Hide sidebar' : 'Show sidebar'" @click="sidebar = !sidebar"><PanelLeftClose v-if="sidebar" :size="19" /><PanelLeftOpen v-else :size="19" /></button>
+        <button v-for="tab in tabs" :key="tab.id" :class="['rail-button', { active: sidebar && panel === tab.id }]" :title="tab.label" :aria-label="tab.label" :aria-pressed="sidebar && panel === tab.id" @click="!mobile && sidebar && panel === tab.id ? sidebar = false : selectPanel(tab.id)"><component :is="tab.icon" :size="19" :stroke-width="1.6" /><span v-if="mobile" class="mobile-tool-label">{{ tab.label }}</span><span v-if="tab.id === 'review' && activeComments" class="rail-dot" /></button>
         <div class="rail-spacer" />
-        <button class="rail-button" :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'" :title="theme === 'dark' ? 'Light mode' : 'Dark mode'" @click="theme = theme === 'dark' ? 'light' : 'dark'"><Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" /></button>
-        <button class="rail-button" title="Fountain reference" aria-label="Fountain reference" @click="helpOpen = true"><CircleHelp :size="18" /></button>
+        <button v-if="!mobile" class="rail-button" :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'" :title="theme === 'dark' ? 'Light mode' : 'Dark mode'" @click="theme = theme === 'dark' ? 'light' : 'dark'"><Sun v-if="theme === 'dark'" :size="18" /><Moon v-else :size="18" /></button>
+        <button v-if="!mobile" class="rail-button" title="Fountain reference" aria-label="Fountain reference" @click="helpOpen = true"><CircleHelp :size="18" /></button>
+        <button v-if="!mobile && !installed" class="rail-button" title="Install app" aria-label="Install app" @click="installApp"><CircleArrowDown :size="18" /></button>
+        <button v-if="!mobile && updateAvailable" class="rail-button update-available" title="Update app" aria-label="Update app" @click="updateHelpOpen = true"><RefreshCw :size="18" /></button>
         <a v-if="session.authMode === 'oauth'" class="rail-button" href="/auth/logout" aria-label="Sign out" title="Sign out"><LogOut :size="18" /></a>
       </aside>
       <aside v-if="sidebar && connection && synced" class="sidebar" :class="{ 'scratchpad-sidebar': panel === 'scratchpad' }">
-        <div class="sidebar-heading"><h2>{{ panelTitle }}</h2><span v-if="panel === 'outline'" class="count">{{ blocks.filter(b => b.type === 'scene').length }} scenes</span><button v-else class="icon-button compact" aria-label="Close sidebar" @click="sidebar = false"><X :size="14" /></button></div>
+        <div class="sidebar-heading"><h2>{{ panelTitle }}</h2><span v-if="panel === 'outline'" class="count">{{ blocks.filter(b => b.type === 'scene').length }} scenes</span><button v-else-if="!mobile" class="icon-button compact" aria-label="Close sidebar" @click="sidebar = false"><X :size="14" /></button></div>
         <div v-if="panel === 'outline'" class="outline panel-body">
           <div class="outline-summary"><span>{{ words.toLocaleString() }} words</span><span>~{{ estimate }} {{ estimate === 1 ? 'page' : 'pages' }}</span></div>
           <button v-for="(block, i) in outline" :key="block.from" :class="['outline-item', block.type, { current: cursor.line >= block.startLine && cursor.line < (outline[i + 1]?.startLine || Infinity) }]" @click="goTo(block.from)"><span v-if="block.type === 'scene'" class="outline-number">{{ block.sceneNumber || outline.slice(0, i + 1).filter(b => b.type === 'scene').length }}</span><span>{{ block.text.replace(/^#+\s*|^=\s*/, '') }}</span></button>
@@ -276,16 +383,30 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
         <div v-else-if="panel === 'scratchpad'" class="scratchpad-panel"><p class="panel-intro">A shared place for everything that isn't on the page. Markdown supported.</p><div class="panel-tabs scratchpad-tabs"><button :class="{ active: scratchView === 'write' }" @click="scratchView = 'write'">Write</button><button :class="{ active: scratchView === 'preview' }" @click="scratchView = 'preview'">Preview</button></div><TextEditor v-if="scratchView === 'write'" :key="currentId + '-scratch'" :ytext="connection.scratchpad" :awareness="connection.provider.awareness" markdown mode="split" /><div v-else class="markdown-content scratchpad-preview" v-html="scratchHtml || '<p class=&quot;muted&quot;>Nothing here yet.</p>'" /></div>
         <VersionPanel v-else-if="panel === 'versions'" :key="currentId" :document-id="currentId" @error="notify" />
       </aside>
+      <div v-if="mobile && sidebar" class="mobile-tool-actions">
+        <div class="mobile-editor-mode"><span>Editor</span><div class="segmented"><button :class="{ active: mode === 'live' }" @click="setMode('live')">Live formatting</button><button :class="{ active: mode === 'split' }" @click="setMode('split')">Raw Fountain</button></div></div>
+        <div class="mobile-extra-actions">
+          <button class="text-button" @click="reviewMode = !reviewMode"><Pencil :size="16" />{{ reviewMode ? 'Switch to editing' : 'Suggest edits' }}</button>
+          <button class="text-button" :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'" @click="theme = theme === 'dark' ? 'light' : 'dark'"><Sun v-if="theme === 'dark'" :size="16" /><Moon v-else :size="16" />{{ theme === 'dark' ? 'Light' : 'Dark' }}</button>
+          <button class="text-button" @click="helpOpen = true"><CircleHelp :size="16" />Syntax</button>
+          <button v-if="!installed" class="text-button" @click="installApp"><CircleArrowDown :size="16" />Install app</button>
+          <button v-if="updateAvailable" class="text-button update-available" @click="updateHelpOpen = true"><RefreshCw :size="16" />Update app</button>
+        </div>
+      </div>
+      </div>
 
-      <main class="editor-main" :class="{ 'split-mode': mode === 'split' }">
+      <main class="editor-main" :class="{ 'split-mode': mode === 'split' }" :inert="mobile && sidebar">
         <div class="editor-toolbar">
-          <div class="button-row"><button class="icon-button compact" title="Undo (Ctrl/⌘ Z)" aria-label="Undo" @mousedown.prevent @click="editor?.undo()"><Undo2 :size="15" /></button><button class="icon-button compact" title="Redo (Ctrl/⌘ Shift Z)" aria-label="Redo" @mousedown.prevent @click="editor?.redo()"><Redo2 :size="15" /></button><span class="toolbar-divider" /><button class="icon-button compact" title="Bold (Ctrl/⌘ B)" aria-label="Bold" @mousedown.prevent @click="editor?.format('**')"><Bold :size="14" /></button><button class="icon-button compact" title="Italic (Ctrl/⌘ I)" aria-label="Italic" @mousedown.prevent @click="editor?.format('*')"><Italic :size="14" /></button><button class="icon-button compact" title="Underline (Ctrl/⌘ U)" aria-label="Underline" @mousedown.prevent @click="editor?.format('_')"><Underline :size="14" /></button><button class="icon-button compact" title="Link image to selection (Ctrl/⌘ Shift K)" aria-label="Link image to selection" @mousedown.prevent @click="linkImage"><ImagePlus :size="15" /></button></div>
-          <div class="button-row"><button :class="['text-button editing-mode', { suggesting: reviewMode }]" :aria-pressed="reviewMode" :title="reviewMode ? 'Switch to direct editing' : 'Suggest changes instead of editing directly'" @click="reviewMode = !reviewMode"><Pencil :size="13" />{{ reviewMode ? 'Suggesting' : 'Editing' }}<ChevronDown :size="10" /></button><button class="icon-button compact" aria-label="Add comment" title="Add comment (Ctrl/⌘ Alt M)" @click="addComment"><MessageSquare :size="15" /></button></div>
+          <div class="button-row"><button class="icon-button compact" title="Undo (Ctrl/⌘ Z)" aria-label="Undo" @pointerdown.prevent @click="editor?.undo()"><Undo2 :size="17" /></button><button class="icon-button compact" title="Redo (Ctrl/⌘ Shift Z)" aria-label="Redo" @pointerdown.prevent @click="editor?.redo()"><Redo2 :size="17" /></button><span class="toolbar-divider" /><button class="icon-button compact" title="Bold (Ctrl/⌘ B)" aria-label="Bold" @pointerdown.prevent @click="editor?.format('**')"><Bold :size="16" /></button><button class="icon-button compact" title="Italic (Ctrl/⌘ I)" aria-label="Italic" @pointerdown.prevent @click="editor?.format('*')"><Italic :size="16" /></button><button class="icon-button compact" title="Underline (Ctrl/⌘ U)" aria-label="Underline" @pointerdown.prevent @click="editor?.format('_')"><Underline :size="16" /></button><button class="icon-button compact" title="Link image to selection (Ctrl/⌘ Shift K)" aria-label="Link image to selection" @pointerdown.prevent @click="linkImage"><ImagePlus :size="17" /></button></div>
+          <div class="button-row"><button :class="['text-button editing-mode', { suggesting: reviewMode }]" :aria-pressed="reviewMode" :title="reviewMode ? 'Switch to direct editing' : 'Suggest changes instead of editing directly'" @click="reviewMode = !reviewMode"><Pencil :size="13" />{{ reviewMode ? 'Suggesting' : 'Editing' }}<ChevronDown :size="10" /></button><button class="icon-button compact" aria-label="Add comment" title="Add comment (Ctrl/⌘ Alt M)" @pointerdown.prevent @click="addComment"><MessageSquare :size="17" /></button></div>
+        </div>
+        <div v-if="mobile && mobilePane === 'write' && synced" class="mobile-writing-actions" aria-label="Screenplay shortcuts">
+          <button @pointerdown.prevent @click="namePicker = 'locations'">Scene</button><button @pointerdown.prevent @click="namePicker = 'characters'">Character</button><button @pointerdown.prevent @click="editor?.insertParenthetical()">(Aside)</button><button @pointerdown.prevent @click="completeName">Complete ↹</button>
         </div>
         <div v-if="!synced" class="editor-connecting"><LoaderCircle :size="20" class="spin" /><p>Connecting to document…</p><button v-if="error" class="text-button" @click="initialize">Reconnect</button></div>
         <div v-else class="editing-area">
           <div class="source-pane"><div v-if="mode === 'split'" class="pane-heading">SOURCE</div><div class="editor-with-review"><TextEditor ref="editor" :key="currentId" :ytext="connection.text" :awareness="connection.provider.awareness" :user="session.user" :mode="mode" :review="reviewMode" @selection="onSelection" @cursor="cursor = $event" @geometry="geometry = $event" @display="displaySource = $event" @error="notify" @decide="decideSuggestion" @link-image="linkImage" @open-comment="lineComments?.reveal($event)" @scroll="syncScroll('source', $event)" /><InlineComments ref="lineComments" :key="currentId + '-comments'" :doc="connection.doc" :revision="revision" :geometry="geometry" :selection="selection" :user="session.user" @jump="goTo" @jump-annotation="editor?.goToAnnotation($event)" /></div></div>
-          <div v-if="mode === 'split'" class="preview-pane"><div class="pane-heading preview-heading"><span>PREVIEW</span><button :class="['icon-button', 'compact', 'scroll-sync-toggle', { active: scrollSync }]" :aria-pressed="scrollSync" aria-label="Synchronized scrolling" title="Toggle synchronized scrolling" @click="scrollSync = !scrollSync"><Link :size="12" /></button></div><ScreenplayPreview ref="preview" :blocks="displayBlocks" @scroll="syncScroll('preview', $event)" /></div>
+          <div v-if="mode === 'split' || mobile" class="preview-pane"><div class="pane-heading preview-heading"><span>PREVIEW</span><button v-if="!mobile" :class="['icon-button', 'compact', 'scroll-sync-toggle', { active: scrollSync }]" :aria-pressed="scrollSync" aria-label="Synchronized scrolling" title="Toggle synchronized scrolling" @click="scrollSync = !scrollSync"><Link :size="12" /></button></div><ScreenplayPreview ref="preview" :blocks="displayBlocks" @scroll="syncScroll('preview', $event)" /></div>
         </div>
       </main>
     </div>
@@ -299,6 +420,9 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
   </div>
   <div v-if="error && session?.user" class="toast" role="status"><span>{{ error }}</span><button class="icon-button compact" aria-label="Dismiss notification" @click="error = ''"><X :size="14" /></button></div>
   <Teleport to="body">
+    <div v-if="appUpdating" class="modal-backdrop" role="alert" aria-live="polite"><div class="modal app-update-progress"><LoaderCircle class="spin" :size="24" /><p>Confirming saved edits and updating…</p></div></div>
+    <div v-else-if="updateHelpOpen" class="modal-backdrop" @click.self="updateHelpOpen = false"><section class="modal install-modal" role="dialog" aria-modal="true" aria-labelledby="update-title"><header><h2 id="update-title">Update available</h2><button class="icon-button" aria-label="Close update" @click="updateHelpOpen = false"><X :size="20" /></button></header><p>A new version is ready. Finish any unposted comments first. Saved edits will be confirmed with the server before this tab reloads.</p><button class="primary-button" :disabled="dirtyOffline || status !== 'connected'" @click="updateApp">Reload and update</button></section></div>
+    <div v-if="installHelpOpen" class="modal-backdrop" @click.self="installHelpOpen = false"><section class="modal install-modal" role="dialog" aria-modal="true" aria-labelledby="install-title"><header><h2 id="install-title">Install on your device</h2><button class="icon-button" aria-label="Close install instructions" @click="installHelpOpen = false"><X :size="20" /></button></header><ul><li>iPhone / iPad: open in Safari, tap <strong>Share → Add to Home Screen</strong>.</li><li>Android / desktop: use your browser’s <strong>Install app</strong> or <strong>Add to Home screen</strong> menu.</li><li>Installation requires <strong>HTTPS</strong> (or localhost for development).</li><li>This adds an app icon and a standalone window. Opening documents and live collaboration still require a connection; unsynced edits aren’t stored offline.</li></ul></section></div>
     <div v-if="profileOpen" class="modal-backdrop" @click.self="profileOpen = false">
       <form class="modal writer-profile-modal" role="dialog" aria-modal="true" aria-labelledby="writer-profile-title" @submit.prevent="saveName">
         <header><h2 id="writer-profile-title">Your writer name</h2><button type="button" class="icon-button" aria-label="Close writer profile" @click="profileOpen = false"><X :size="18" /></button></header>
@@ -321,4 +445,5 @@ I wasn't sure you would.</pre></dd><dt>Force an element</dt><dd><code>.A SCENE</
     </div>
   </Teleport>
   <ImageLinkDialog v-if="imageLinkOpen && connection" :doc="connection.doc" :document-id="currentId" :selection="selection" :user="session.user" @close="imageLinkOpen = false" @error="notify" />
+  <MobileNamePicker v-if="namePicker && connection" :doc="connection.doc" :revision="revision" :blocks="displayBlocks" :kind="namePicker" @select="chooseName" @close="namePicker = null; editor?.focus()" />
 </template>

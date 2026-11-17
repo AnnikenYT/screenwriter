@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { pwaPlugin } from './build/pwa.js'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), pwaPlugin()],
   build: {
     rollupOptions: {
       output: {

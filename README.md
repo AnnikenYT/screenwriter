@@ -14,6 +14,8 @@
 - Shared Markdown scratchpad with preview.
 - Tab completion for character/location names; linked passage images on hover.
 - Formatting shortcuts, selection wrapping, and persistent light/dark themes.
+- Full-width phone editing, Write/Preview tabs, keyboard-aware sizing, and touch screenplay shortcuts.
+- Installable PWA with opt-in updates; only public assets are cached, never documents or identity.
 - Named versions, automatic snapshots, and restore with a backup.
 - Fountain import/export and screenplay PDF export, including dual dialogue.
 
@@ -26,6 +28,7 @@ docker compose up -d
 - Open **http://localhost:3000**.
 - Image: `ghcr.io/annikenyt/screenwriter:latest`.
 - Private packages require `docker login ghcr.io` before pulling.
+- Install via your browser’s app menu; on iOS, Safari → Share → Add to Home Screen. Requires HTTPS.
 - Copy `.env.example` to `.env` for configuration; all settings are environment variables.
 - Data is persisted in the `screenplay-data` volume.
 - Build locally instead: `docker compose up --build -d`.
@@ -47,7 +50,7 @@ docker compose up -d
 - Bind is localhost-only by default; set `BIND_ADDRESS` to expose another interface.
 - Back up the entire data volume consistently, preferably with the container stopped.
 - Versions/uploads are retained indefinitely; monitor disk usage.
-- No persistent offline browser storage: keep disconnected tabs open until reconnected.
+- No persistent offline document storage: keep disconnected tabs open, or use **Download draft** to save proposed writing as Fountain (not comments/images).
 - Same sheet field edited simultaneously: last writer wins.
 - PDF: Courier is not full-Unicode; no automatic continuation cues; long title metadata is clipped.
 - Health check: `/api/health`. Limits and other settings: [`.env.example`](.env.example).

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as Y from 'yjs'
 import { applyReviewChanges, projectReview, sourceToView, viewToSource, annotationViewRange } from '../src/lib/review-model.js'
-import { relativeAnchor } from '../src/lib/collaboration.js'
+import { relativeAnchor, resolveAnchor } from '../src/lib/collaboration.js'
 import { reconcileSheets } from '../shared/entities.js'
 import { sheetFieldKey } from '../src/lib/collaboration.js'
 
@@ -142,5 +142,18 @@ test('annotations on proposed text follow edits within the same proposal', () =>
   const range = annotationViewRange(doc, model, comment)
   assert.equal(model.text.slice(range.from, range.to), 'room')
   assert.equal(doc.getText('screenplay').toString(), 'A.')
+  doc.destroy()
+})
+
+test('formatting and removing wrappers preserve comments and images on unchanged words', () => {
+  const doc = fixture()
+  const anchor = relativeAnchor(doc, 4, 7)
+  edit(doc, 4, 7, '**cat**', alice, false)
+  let range = resolveAnchor(doc, anchor)
+  assert.equal(doc.getText('screenplay').toString().slice(range.from, range.to), 'cat')
+  edit(doc, 4, 11, 'cat', alice, false)
+  range = resolveAnchor(doc, anchor)
+  assert.equal(doc.getText('screenplay').toString().slice(range.from, range.to), 'cat')
+  assert.equal(doc.getText('screenplay').toString(), 'The cat waits.')
   doc.destroy()
 })

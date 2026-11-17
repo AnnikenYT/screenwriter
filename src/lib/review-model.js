@@ -138,8 +138,24 @@ export function applyReviewChanges(doc, model, changes, { user, suggesting, orig
       } else {
         const from = viewToSource(model, change.from, -1)
         const to = viewToSource(model, change.to, 1)
-        if (to > from) text.delete(from, to - from)
-        if (change.replacement) text.insert(from, change.replacement)
+        const original = model.source.slice(from, to)
+        const wrappedAt = original ? change.replacement.indexOf(original) : -1
+        const unwrappedAt = change.replacement ? original.indexOf(change.replacement) : -1
+        if (wrappedAt >= 0) {
+          // Wrapping a selection in markup must not replace its CRDT items:
+          // comments/image links on the actual words should survive formatting.
+          const suffix = change.replacement.slice(wrappedAt + original.length)
+          const prefix = change.replacement.slice(0, wrappedAt)
+          if (suffix) text.insert(to, suffix)
+          if (prefix) text.insert(from, prefix)
+        } else if (unwrappedAt >= 0) {
+          const suffixLength = original.length - unwrappedAt - change.replacement.length
+          if (suffixLength) text.delete(from + unwrappedAt + change.replacement.length, suffixLength)
+          if (unwrappedAt) text.delete(from, unwrappedAt)
+        } else {
+          if (to > from) text.delete(from, to - from)
+          if (change.replacement) text.insert(from, change.replacement)
+        }
       }
     }
   }, origin)
