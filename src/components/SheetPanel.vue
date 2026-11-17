@@ -51,7 +51,7 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
 <template>
   <section class="sheet-panel panel-body">
     <template v-if="!selected">
-      <p class="panel-intro">Created automatically from {{ kind === 'characters' ? 'speaking characters' : 'scene headings' }}. Always linked to your screenplay.</p>
+      <p class="panel-intro">Created automatically from {{ kind === 'characters' ? 'speaking characters' : 'scene headings' }}.</p>
       <div class="segmented lifecycle-tabs"><button :class="{ active: !archived }" @click="archived = false">Active</button><button :class="{ active: archived }" @click="archived = true">Archived</button></div>
       <input v-model="filter" class="search-input" :placeholder="`Find ${kind === 'characters' ? 'a character' : 'a location'}…`" :aria-label="`Search ${kind}`" />
       <button v-for="sheet in sheets" :key="sheet.id" class="sheet-list-item" @click="selectedId = sheet.id">
