@@ -98,7 +98,7 @@ export function escapeHtml(text) {
 }
 
 // Restricted inline Fountain markup: no HTML, links or executable attributes.
-export function inlineFountain(text) {
+export function inlineFountain(text, names = null) {
   const escaped = []
   let html = escapeHtml(text.replace(/\\([\\*_])/g, (_, c) => `\u0000${escaped.push(c) - 1}\u0000`))
   html = html.replace(/(^|\n)(\s*)(SHOT:|VFX:|SFX:)/g, '$1$2<strong>$3</strong>')
@@ -107,7 +107,22 @@ export function inlineFountain(text) {
     .replace(/\*\*(?=\S)(.+?\S|\S)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?=\S)([^*\n]*?\S|[^*\s])\*(?!\*)/g, '<em>$1</em>')
     .replace(/_(?=\S)([^_\n]*?\S|[^_\s])_/g, '<u>$1</u>')
-  return html.replace(/\u0000(\d+)\u0000/g, (_, n) => escapeHtml(escaped[Number(n)]))
+  html = html.replace(/\u0000(\d+)\u0000/g, (_, n) => escapeHtml(escaped[Number(n)]))
+  if (names?.html) {
+    html = html.split(/(<\/?(?:strong|em|u)>)/).map(part => part.startsWith('<') ? part : part.replace(names.html, '<strong>$&</strong>')).join('')
+  }
+  return html
+}
+
+// Derive identities from cues/headings, not arbitrary uppercase action words.
+// Separate escaped-HTML and source matchers keep punctuation safe in both views.
+export function createNameMatcher(blocks) {
+  const names = new Set(blocks.filter(block => ['character', 'scene'].includes(block.type))
+    .map(block => (block.type === 'character' ? characterName(block.text) : locationName(block.text)).toUpperCase())
+    .filter(name => name && name.toLowerCase() !== name))
+  const sorted = [...names].sort((a, b) => b.length - a.length)
+  const compile = values => values.length ? new RegExp(`(?<![\\p{L}\\p{N}_])(?:${values.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}_])`, 'gu') : null
+  return { source: compile(sorted), html: compile(sorted.map(escapeHtml)) }
 }
 
 export function screenplayEmphasis(text) {

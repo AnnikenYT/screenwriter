@@ -1,6 +1,27 @@
 import { test, expect } from '@playwright/test'
 
 const source = "INT. ROOM - NOON\n\nMARA (V.O.) (CONT'D)\nHello.\n\nSHOT: A close-up.\nVFX: Sparks.\nSFX: Thunder.\n\nELI (O.S.)\nWait.\n"
+
+test('uppercase character and location mentions are bold outside dialogue in both views', async ({ page, request }) => {
+  const text = 'INT. GREAT HALL - DAY\n\nMARA walks through GREAT HALL. Mara hears an ALARM near MARATHON.\n\nMARA\nHello.\n'
+  const { id } = await (await request.post('/api/documents', { data: { title: 'Name mentions', text } })).json()
+  await page.goto(`/?document=${id}`)
+  const editor = page.getByRole('textbox', { name: 'Screenplay editor' })
+  await expect(editor).toBeVisible()
+  await expect(page.locator('.ft-action .name-mention')).toHaveText(['MARA', 'GREAT HALL'])
+  for (const node of await page.locator('.ft-action .name-mention').all()) await expect(node).toHaveCSS('font-weight', '700')
+  await page.getByRole('button', { name: 'Split', exact: true }).click()
+  await expect(page.locator('.paper .action strong')).toHaveText(['MARA', 'GREAT HALL'])
+  await expect(page.locator('.paper .action')).toContainText('Mara hears an ALARM near MARATHON.')
+  expect(await (await request.get(`/api/documents/${id}/versions`)).json()).toEqual([])
+  // Switching formatting modes must never insert markup into canonical Fountain.
+  const downloadEvent = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export', exact: true }).click()
+  await page.getByRole('button', { name: 'Fountain (.fountain)', exact: true }).click()
+  const download = await downloadEvent
+  const { readFile } = await import('node:fs/promises')
+  expect(await readFile(await download.path(), 'utf8')).toBe(text)
+})
 async function open(page, request) {
   const { id } = await (await request.post('/api/documents', { data: { title: 'Screenplay tools', text: source } })).json()
   await page.goto(`/?document=${id}`)

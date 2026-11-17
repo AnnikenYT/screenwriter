@@ -1,15 +1,15 @@
 import PDFDocument from 'pdfkit';
-import { parseFountain, plainText, inlineFountain } from '../shared/fountain.js';
+import { parseFountain, plainText, inlineFountain, createNameMatcher } from '../shared/fountain.js';
 
 const TOP = 54, BOTTOM = 738, LINE = 12;
 const fontFor = run => `Courier${run.bold && run.italic ? '-BoldOblique' : run.bold ? '-Bold' : run.italic ? '-Oblique' : ''}`;
 
 // Use the shared parser's restricted emphasis grammar, not an HTML renderer.
 // Literal HTML is escaped by inlineFountain and becomes ordinary PDF text.
-function runsFor(text, bold = false) {
+function runsFor(text, bold = false, names = null) {
   const runs = [];
   const style = { bold: bold ? 1 : 0, italic: 0, underline: 0 };
-  for (const part of inlineFountain(text).split(/(<\/?(?:strong|em|u)>)/)) {
+  for (const part of inlineFountain(text, names).split(/(<\/?(?:strong|em|u)>)/)) {
     const tag = /^<(\/?)(strong|em|u)>$/.exec(part);
     if (tag) style[{ strong: 'bold', em: 'italic', u: 'underline' }[tag[2]]] += tag[1] ? -1 : 1;
     else if (part) runs.push({ bold: style.bold > 0, italic: style.italic > 0, underline: style.underline > 0, text: part.replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[entity])) });
@@ -17,11 +17,11 @@ function runsFor(text, bold = false) {
   return runs;
 }
 
-function wrappedLines(pdf, text, width, bold = false) {
+function wrappedLines(pdf, text, width, bold = false, names = null) {
   const lines = [[]];
   let used = 0;
   const nextLine = () => { lines.push([]); used = 0; };
-  for (const run of runsFor(text, bold)) {
+  for (const run of runsFor(text, bold, names)) {
     pdf.font(fontFor(run));
     for (const token of run.text.match(/\n|[^\S\n]+|[^\s]+/g) || []) {
       if (token === '\n') { nextLine(); continue; }
@@ -65,6 +65,7 @@ function titleFields(blocks) {
 // Exported separately so layout can be tested without scraping compressed PDFs.
 export function writeScreenplay(pdf, text, title) {
   const blocks = parseFountain(text);
+  const names = createNameMatcher(blocks);
   const fields = titleFields(blocks);
   const lastTitle = blocks.findLastIndex(block => block.type === 'title');
   pdf.fontSize(12).font('Courier');
@@ -98,7 +99,7 @@ export function writeScreenplay(pdf, text, title) {
           transition: { x: 108, width: 432, align: 'right' },
           centered: { x: 108, width: 432, align: 'center' },
         }[block.type] || { x: 108, width: 432 });
-    return wrappedLines(pdf, block.text, layout.width, block.type === 'character').map(line => ({ ...layout, line }));
+    return wrappedLines(pdf, block.text, layout.width, block.type === 'character', names).map(line => ({ ...layout, line }));
   };
   const groupEnd = start => {
     let end = start + 1;

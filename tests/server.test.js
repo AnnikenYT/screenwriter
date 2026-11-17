@@ -111,9 +111,12 @@ test('PDF keeps character cues and nested production emphasis bold', () => {
     addPage() { return this; },
     bufferedPageRange() { return { start: 0, count: 2 }; },
   };
-  writeScreenplay(pdf, "MARA (V.O.) (CONT'D)\nHello.\n\n**VFX: Bright effect.**", 'A screenplay');
+  writeScreenplay(pdf, "INT. ROOM - DAY\n\nMARA (V.O.) (CONT'D)\nHello.\n\n**VFX: Bright effect.**\n\nMARA visits ROOM. Mara sees ALARM.", 'A screenplay');
   assert.ok(calls.some(call => call.text === "MARA (V.O.) (CONT'D)" && call.font === 'Courier-Bold'));
   assert.ok(calls.some(call => call.text === 'VFX: Bright effect.' && call.font === 'Courier-Bold'));
+  assert.ok(calls.some(call => call.text === 'MARA' && call.font === 'Courier-Bold'));
+  assert.ok(calls.some(call => call.text === 'ROOM' && call.font === 'Courier-Bold'));
+  assert.ok(calls.some(call => call.text.includes('Mara sees ALARM.') && call.font === 'Courier'));
 });
 
 test('server reconciles current screenplay sheets and journals cleanup across restart', async () => {
@@ -695,9 +698,10 @@ ${'A long right dialogue. '.repeat(300)}
   assert.equal(title.page, 0);
   assert.equal(title.font, 'Courier-Bold');
   assert.ok(calls.some(call => call.text === 'Ada Writer' && call.page === 0));
-  const scene = calls.find(call => call.text === 'INT. ROOM - DAY');
+  const scene = calls.find(call => call.text === 'INT. ');
   assert.equal(scene.page, 1);
   assert.equal(scene.y, 54);
+  assert.equal(calls.filter(call => call.page === 1 && call.y === 54).map(call => call.text).join(''), 'INT. ROOM - DAY');
   const left = calls.find(call => call.text === 'Left dialogue.');
   const right = calls.find(call => call.text === 'Right dialogue.');
   assert.equal(left.page, right.page);

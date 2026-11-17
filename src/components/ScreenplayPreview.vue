@@ -1,9 +1,10 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { inlineFountain, titleFields } from '../../shared/fountain.js'
+import { inlineFountain, titleFields, createNameMatcher } from '../../shared/fountain.js'
 const props = defineProps({ blocks: { type: Array, default: () => [] } })
 const emit = defineEmits(['scroll'])
 const scroller = ref(null)
+const names = computed(() => createNameMatcher(props.blocks))
 function markers() { return [...scroller.value.querySelectorAll('[data-from]')].sort((a, b) => Number(a.dataset.from) - Number(b.dataset.from)) }
 function scrollToPosition({ from, ratio }) {
   const root = scroller.value
@@ -68,16 +69,16 @@ const groups = computed(() => {
           <div class="title-page-contact"><p v-for="field in ['contact', 'draft date', 'copyright']" :key="field" v-html="inlineFountain(titleFields(block.text)[field] || '')" /></div>
         </section>
         <div v-else-if="block.type === 'speech'" class="speech" :data-from="block.from">
-          <div v-for="(line, n) in block.items" :key="n" :class="['fountain', line.type]" :data-from="line.from" v-html="inlineFountain(line.text)" />
+          <div v-for="(line, n) in block.items" :key="n" :class="['fountain', line.type]" :data-from="line.from" v-html="inlineFountain(line.text, names)" />
         </div>
         <div v-else-if="block.type === 'dual'" class="dual" :data-from="block.from">
           <div v-for="(side, n) in [block.left, block.right]" :key="n" class="speech">
-            <div v-for="(line, j) in side" :key="j" :class="['fountain', line.type]" :data-from="line.from" v-html="inlineFountain(line.text)" />
+            <div v-for="(line, j) in side" :key="j" :class="['fountain', line.type]" :data-from="line.from" v-html="inlineFountain(line.text, names)" />
           </div>
         </div>
         <div v-else :class="['fountain', block.type]" :data-from="block.from">
           <span v-if="block.sceneNumber" class="scene-number">{{ block.sceneNumber }}</span>
-          <span v-if="block.type !== 'blank' && block.type !== 'pagebreak'" v-html="inlineFountain(block.text)" />
+          <span v-if="block.type !== 'blank' && block.type !== 'pagebreak'" v-html="inlineFountain(block.text, names)" />
         </div>
       </template>
     </article>

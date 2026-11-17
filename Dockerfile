@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM node:24-bookworm-slim AS production
 ARG VCS_REF=unknown
-ARG VERSION=1.4.0
+ARG VERSION=1.4.1
 LABEL org.opencontainers.image.title="Screenwriter" \
       org.opencontainers.image.source="https://github.com/AnnikenYT/screenwriter" \
       org.opencontainers.image.licenses="MIT" \

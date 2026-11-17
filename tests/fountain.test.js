@@ -1,6 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFountain, inlineFountain, plainText, characterName, locationName, titleFields, screenplayEmphasis } from '../shared/fountain.js'
+import { parseFountain, inlineFountain, plainText, characterName, locationName, titleFields, screenplayEmphasis, createNameMatcher } from '../shared/fountain.js'
+
+test('uppercase name mentions use full Unicode-aware identities, not arbitrary capitals', () => {
+  const blocks = parseFountain("INT. GREAT HALL - DAY\n\nINT. HALL - NIGHT\n\nMARA\nHi.\n\n@McClane\nHello.\n\nÉLI\nYes.\n\n@O'BRIEN\nHi.")
+  const names = createNameMatcher(blocks)
+  const text = "MARA visits GREAT HALL. Mara sees MARATHON, MCCLANE, ÉLI and O'BRIEN. ALARM!"
+  assert.deepEqual([...text.matchAll(names.source)].map(match => match[0]), ['MARA', 'GREAT HALL', 'MCCLANE', 'ÉLI', "O'BRIEN"])
+  assert.equal(inlineFountain("MARA visits GREAT HALL. Mara sees ALARM.", names),
+    '<strong>MARA</strong> visits <strong>GREAT HALL</strong>. Mara sees ALARM.')
+  assert.equal(inlineFountain("O'BRIEN & ÉLI <look>", names),
+    '<strong>O&#39;BRIEN</strong> &amp; <strong>ÉLI</strong> &lt;look&gt;')
+  assert.equal(inlineFountain('*MARA* sees **GREAT HALL**.', names),
+    '<em><strong>MARA</strong></em> sees <strong><strong>GREAT HALL</strong></strong>.')
+  assert.deepEqual(createNameMatcher(parseFountain('An ALARM rings.')), { source: null, html: null })
+})
 
 test('production labels remain action and render semantic bold without changing source', () => {
   const source = "SHOT: A close-up.\nVFX: Sparks.\nSFX: Thunder.\n\nMARA (V.O.) (CONT'D)\nHello.\n"

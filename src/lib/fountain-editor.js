@@ -1,13 +1,18 @@
 import { StateField } from '@codemirror/state'
 import { Decoration, ViewPlugin, WidgetType, EditorView } from '@codemirror/view'
-import { parseFountain, inlineFountain, screenplayEmphasis } from '../../shared/fountain.js'
+import { parseFountain, inlineFountain, screenplayEmphasis, createNameMatcher } from '../../shared/fountain.js'
 
 export const parsedFountain = StateField.define({
   create: state => parseFountain(state.doc.toString()),
   update: (blocks, tr) => tr.docChanged ? parseFountain(tr.newDoc.toString()) : blocks,
 })
 
-function markup(line, from, raw, ranges, type) {
+const nameMentions = StateField.define({
+  create: state => createNameMatcher(state.field(parsedFountain)),
+  update: (value, tr) => tr.docChanged ? createNameMatcher(tr.state.field(parsedFountain)) : value,
+})
+
+function markup(line, from, raw, ranges, type, names) {
   const add = (a, b, spec) => { if (b > a) ranges.push(Decoration[spec ? 'mark' : 'replace'](spec || {}).range(from + a, from + b)) }
   // Keep offsets rooted in the source, hiding only formatting delimiters.
   if (!raw) {
@@ -19,6 +24,9 @@ function markup(line, from, raw, ranges, type) {
   const expression = /(?<!\\)(\*{1,3}|_)(?=\S)(.+?)\1/g
   if (type !== 'note' && type !== 'boneyard') {
     for (const span of screenplayEmphasis(line)) add(span.from, span.to, { class: 'emphasis-bold' })
+    if (type !== 'title' && names.source) {
+      for (const match of line.matchAll(names.source)) add(match.index, match.index + match[0].length, { class: 'emphasis-bold name-mention' })
+    }
   }
   for (const match of line.matchAll(expression)) {
     const length = match[1].length
@@ -28,8 +36,8 @@ function markup(line, from, raw, ranges, type) {
 }
 
 class DualDialogueWidget extends WidgetType {
-  constructor(left, right, annotations, callbacks) { super(); this.left = left; this.right = right; this.annotations = annotations; this.callbacks = callbacks }
-  eq(other) { return JSON.stringify([this.left, this.right, this.annotations]) === JSON.stringify([other.left, other.right, other.annotations]) }
+  constructor(left, right, annotations, callbacks, names) { super(); this.left = left; this.right = right; this.annotations = annotations; this.callbacks = callbacks; this.names = names }
+  eq(other) { return this.names.source?.source === other.names.source?.source && JSON.stringify([this.left, this.right, this.annotations]) === JSON.stringify([other.left, other.right, other.annotations]) }
   toDOM(view) {
     const wrapper = document.createElement('div')
     wrapper.className = 'live-dual-dialogue dual'
@@ -41,7 +49,7 @@ class DualDialogueWidget extends WidgetType {
         line.className = `fountain ${block.type}`
         line.dataset.sourceFrom = block.from
         line.dataset.sourceTo = block.to
-        line.innerHTML = inlineFountain(block.text)
+        line.innerHTML = inlineFountain(block.text, this.names)
         for (const annotation of this.annotations.filter(a => a.from <= block.to && a.to >= block.from)) {
           if (annotation.type === 'image') {
             line.classList.add('image-linked-passage')
@@ -90,7 +98,7 @@ function dualFormatting(getSuggestions, getAnnotations, callbacks) {
       })
       const proposed = getSuggestions?.().some(span => span.from <= last.to && span.to >= left.from)
       const annotations = getAnnotations?.().filter(a => a.from <= last.to && a.to >= left.from) || []
-      if (!active && !proposed) decorations.push(Decoration.replace({ widget: new DualDialogueWidget(blocks.slice(i, end), blocks.slice(next, rightEnd), annotations, callbacks), block: true }).range(left.from, last.to))
+      if (!active && !proposed) decorations.push(Decoration.replace({ widget: new DualDialogueWidget(blocks.slice(i, end), blocks.slice(next, rightEnd), annotations, callbacks, state.field(nameMentions)), block: true }).range(left.from, last.to))
       i = rightEnd - 1
     }
     return Decoration.set(decorations, true)
@@ -105,6 +113,7 @@ function dualFormatting(getSuggestions, getAnnotations, callbacks) {
 export function fountainFormatting(live, getSuggestions, getAnnotations, callbacks = {}) {
   return [
     parsedFountain,
+    nameMentions,
     ...(live ? [dualFormatting(getSuggestions, getAnnotations, callbacks)] : []),
     ViewPlugin.fromClass(class {
       constructor(view) { this.decorations = this.build(view) }
@@ -129,7 +138,7 @@ export function fountainFormatting(live, getSuggestions, getAnnotations, callbac
             const line = view.state.doc.line(n)
             if (!view.visibleRanges.some(r => line.to >= r.from && line.from <= r.to)) continue
             ranges.push(Decoration.line({ class: `ft-${block.type} ${live ? active ? 'ft-active' : 'ft-rendered' : 'ft-source'}` }).range(line.from))
-            markup(line.text, line.from, !live || active, ranges, block.type)
+            markup(line.text, line.from, !live || active, ranges, block.type, view.state.field(nameMentions))
           }
         }
         return Decoration.set(ranges, true)
