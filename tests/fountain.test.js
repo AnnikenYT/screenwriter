@@ -1,6 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFountain, inlineFountain, plainText, characterName, locationName, titleFields } from '../shared/fountain.js'
+import { parseFountain, inlineFountain, plainText, characterName, locationName, titleFields, screenplayEmphasis } from '../shared/fountain.js'
+
+test('production labels remain action and render semantic bold without changing source', () => {
+  const source = "SHOT: A close-up.\nVFX: Sparks.\nSFX: Thunder.\n\nMARA (V.O.) (CONT'D)\nHello.\n"
+  assert.equal(parseFountain(source).filter(block => block.type === 'character').length, 1)
+  assert.equal(characterName("MARA (V.O.) (CONT'D)"), 'MARA')
+  assert.equal(locationName('INT./EXT. CAR - NOON'), 'CAR')
+  for (const text of ['SHOT:', 'VFX:', 'SFX:', "(CONT'D)", '(V.O.)', '(O.S.)', '(O.C.)']) {
+    assert.equal(inlineFountain(text), `<strong>${text.replaceAll("'", '&#39;')}</strong>`)
+    assert.deepEqual(screenplayEmphasis(text), [{ from: 0, to: text.length }])
+  }
+  assert.equal(inlineFountain('VFX: <script>'), '<strong>VFX:</strong> &lt;script&gt;')
+})
 
 test('scene headings, dialogue groups and UTF16 source ranges', () => {
   const text = 'INT. CAFÉ - DAY #1A#\n\nA door opens. 🎬\n\nMARA (softly)\n(quietly)\nHello.\nTwo lines.\n\n\n!LOUD ACTION\n'

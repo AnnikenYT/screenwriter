@@ -14,6 +14,8 @@
 - Rename characters/locations across screenplay text, scratchpad, and sheet notes.
 - Shared Markdown scratchpad with preview.
 - Automatic character/location suggestions while typing, with Tab or touch to accept; linked passage images on hover.
+- Screenplay shortcuts: INT./EXT., heading times, SHOT:/VFX:/SFX:, and dialogue extensions (CONT'D, V.O., O.S., O.C.).
+- Bold character cues and production labels in live/split views and PDF; a small name reminder for unnamed guests.
 - Formatting shortcuts, selection wrapping, and persistent light/dark themes.
 - Full-width phone editing, Write/Preview tabs, keyboard-aware sizing, and touch screenplay shortcuts.
 - Installable PWA with opt-in updates; only public assets are cached, never documents or identity.

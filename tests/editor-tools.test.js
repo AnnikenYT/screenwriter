@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EditorState } from '@codemirror/state'
 import * as Y from 'yjs'
-import { wrapSelection, nameCompletions, insertScreenplayName, insertParenthetical } from '../src/lib/editor-tools.js'
+import { wrapSelection, nameCompletions, screenplayCompletions, completeName, insertScreenplayName, insertParenthetical } from '../src/lib/editor-tools.js'
 import { reconcileSheets } from '../shared/entities.js'
 
 function editor(text, from, to = from) {
@@ -84,4 +84,42 @@ test('touch parenthetical shortcut inserts an aside and keeps the caret inside',
   assert.equal(view.state.selection.main.head, 13)
   wrapSelection(view, '_')
   assert.equal(view.state.doc.toString(), 'MARA\nHello.\n(__)')
+})
+
+test('screenplay keywords complete headings, production labels and heading-only times', () => {
+  const doc = new Y.Doc()
+  const options = text => {
+    const view = editor(text, text.length)
+    return screenplayCompletions(doc, view.state, text.length)?.options.map(option => option.apply) || []
+  }
+  assert.deepEqual(options('I'), ['INT. ', 'INT./EXT. '])
+  assert.deepEqual(options('E'), ['EXT. '])
+  for (const word of ['SHOT: ', 'VFX: ', 'SFX: ']) assert.ok(options(word[0]).includes(word))
+  for (const time of ['MORNING', 'NOON', 'DAY', 'EVENING', 'NIGHT']) assert.ok(options('INT. ROOM - ').includes(` - ${time}`))
+  assert.deepEqual(options('EXT. ROAD - N'), [' - NOON', ' - NIGHT'])
+  assert.ok(options('INT./EXT. CAR ').includes(' - DAY'))
+  assert.deepEqual(options('An ordinary action - N'), [])
+  assert.deepEqual(options('MARA\nEXT'), [])
+  assert.deepEqual(options('MARA\nINT. ROOM - N'), [])
+  assert.deepEqual(options('/*\nINT. ROOM - N\n*/'), [])
+  const view = editor('EXT. ROAD - NI', 14)
+  completeName(view, doc)
+  assert.equal(view.state.doc.toString(), 'EXT. ROAD - NIGHT')
+  doc.destroy()
+})
+
+test('dialogue extensions complete only on character cues and preserve source names', () => {
+  const doc = new Y.Doc()
+  doc.getMap('characters').set('mara', { id: 'mara', name: 'MARA' })
+  const options = text => {
+    const view = editor(text, text.length)
+    return screenplayCompletions(doc, view.state, text.length)?.options.map(option => option.apply) || []
+  }
+  assert.deepEqual(options('MARA '), ["(CONT'D)", '(V.O.)', '(O.S.)', '(O.C.)'])
+  assert.deepEqual(options('MARA (V'), ['(V.O.)'])
+  assert.deepEqual(options('NEW WRITER (C'), ["(CONT'D)"])
+  assert.deepEqual(options('@NewName (O.'), ['(O.S.)', '(O.C.)'])
+  assert.deepEqual(options('MARA\n(whispering'), [])
+  assert.deepEqual(options('An ordinary paragraph ('), [])
+  doc.destroy()
 })

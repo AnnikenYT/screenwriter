@@ -76,7 +76,10 @@ export function createWorkspace(options = {}) {
     const raw = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
     if (!raw || !/^[A-Za-z0-9_-]{43}$/.test(raw)) return null;
     const record = db.prepare('SELECT user FROM sessions WHERE id=? AND expires>?').get(sha(raw), Date.now());
-    return record ? JSON.parse(record.user) : null;
+    if (!record) return null;
+    const user = JSON.parse(record.user);
+    if (authMode === 'none') user.nameSet ??= !/^Writer [0-9a-f]{4}$/i.test(user.name);
+    return user;
   }
   function sessionKey(req) {
     const raw = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
@@ -107,7 +110,7 @@ export function createWorkspace(options = {}) {
     req.sessionKey = sessionKey(req);
     const publicAsset = ['GET', 'HEAD'].includes(req.method) && /^\/(?:assets\/|icons\/|sw\.js$|offline\.html$|manifest\.webmanifest$)/.test(req.path);
     if (!req.user && authMode === 'none' && !publicAsset) {
-      req.user = { id: randomUUID(), name: `Writer ${randomBytes(2).toString('hex')}`, color: ['#c2410c', '#2563eb', '#7c3aed', '#047857'][randomBytes(1)[0] % 4] };
+      req.user = { id: randomUUID(), name: `Writer ${randomBytes(2).toString('hex')}`, nameSet: false, color: ['#c2410c', '#2563eb', '#7c3aed', '#047857'][randomBytes(1)[0] % 4] };
       req.sessionKey = setSession(res, req.user);
     }
     next();
@@ -121,7 +124,7 @@ export function createWorkspace(options = {}) {
     const name = req.body?.name;
     if (typeof name !== 'string' || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name) ||
       name.trim().length < 1 || name.trim().length > 60) throw fail(400, 'Name must be 1–60 characters on one line, without control characters');
-    const user = { ...req.user, name: name.trim() };
+    const user = { ...req.user, name: name.trim(), nameSet: true };
     db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
     res.setHeader('Cache-Control', 'no-store');
     res.json({ authMode, user });

@@ -1,6 +1,6 @@
 import { StateField } from '@codemirror/state'
 import { Decoration, ViewPlugin, WidgetType, EditorView } from '@codemirror/view'
-import { parseFountain, inlineFountain } from '../../shared/fountain.js'
+import { parseFountain, inlineFountain, screenplayEmphasis } from '../../shared/fountain.js'
 
 export const parsedFountain = StateField.define({
   create: state => parseFountain(state.doc.toString()),
@@ -17,6 +17,9 @@ function markup(line, from, raw, ranges, type) {
     if (suffix) add(suffix.index, line.length)
   }
   const expression = /(?<!\\)(\*{1,3}|_)(?=\S)(.+?)\1/g
+  if (type !== 'note' && type !== 'boneyard') {
+    for (const span of screenplayEmphasis(line)) add(span.from, span.to, { class: 'emphasis-bold' })
+  }
   for (const match of line.matchAll(expression)) {
     const length = match[1].length
     if (!raw) { add(match.index, match.index + length); add(match.index + match[0].length - length, match.index + match[0].length) }

@@ -98,6 +98,7 @@ async function initialize() {
   try {
     session.value = await api('/api/session')
     if (!session.value.user) return
+    writerName.value = session.value.user.nameSet ? session.value.user.name : ''
     await refreshDocuments()
     const requested = new URL(location.href).searchParams.get('document')
     if (requested && !documents.value.some(d => d.id === requested)) notify('That document is not available. Choose a document or create a new one.')
@@ -393,6 +394,11 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       </div>
     </header>
 
+    <form v-if="session.authMode === 'none' && !session.user.nameSet && !profileOpen" class="writer-name-nag" aria-label="Set your writer name" @submit.prevent="saveName">
+      <label for="quick-writer-name">Who’s writing? <span>Add your name for collaborators.</span></label>
+      <input id="quick-writer-name" v-model="writerName" aria-label="Your writer name" placeholder="Your name" maxlength="60" autocomplete="nickname" required />
+      <button class="text-button" :disabled="savingName || !writerName.trim()">Save name</button>
+    </form>
     <nav v-if="mobile" class="mobile-view-tabs" aria-label="Mobile workspace">
       <button :class="{ active: mobilePane === 'write' && !sidebar }" :aria-pressed="mobilePane === 'write' && !sidebar" aria-label="Write" :title="reviewMode ? 'Suggesting edits' : 'Write screenplay'" @click="switchMobilePane('write')"><Pencil :size="16" />{{ reviewMode ? 'Suggesting' : 'Write' }}</button>
       <button :class="{ active: mobilePane === 'preview' && !sidebar }" :aria-pressed="mobilePane === 'preview' && !sidebar" @click="switchMobilePane('preview')"><FileText :size="16" />Preview</button>

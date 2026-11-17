@@ -4,12 +4,12 @@ const scenePattern = /^(?:INT\.?\/EXT|INT\/EXT|INT|EXT|EST|I\/E)(?:[. ]|$)/i
 const titlePattern = /^(Title|Credit|Author|Authors|Source|Draft date|Contact|Copyright|Notes):/i
 
 export function characterName(text) {
-  return text.trim().replace(/^@/, '').replace(/\s*\^\s*$/, '').replace(/\s*\([^)]*\)\s*$/, '').trim()
+  return text.trim().replace(/^@/, '').replace(/\s*\^\s*$/, '').replace(/(?:\s*\([^)]*\))+\s*$/, '').trim()
 }
 
 export function locationName(text) {
   return text.replace(/^\./, '').replace(/^\s*(?:INT\.?\/EXT\.?|INT\/EXT\.?|INT\.?|EXT\.?|EST\.?|I\/E\.?)\s+/i, '')
-    .replace(/\s*#[\w.-]+#\s*$/, '').replace(/\s+-\s+(?:DAY|NIGHT|MORNING|EVENING|DAWN|DUSK|LATER|CONTINUOUS|SAME|MOMENTS LATER).*$/i, '').trim()
+    .replace(/\s*#[\w.-]+#\s*$/, '').replace(/\s+-\s+(?:DAY|NIGHT|MORNING|NOON|EVENING|DAWN|DUSK|LATER|CONTINUOUS|SAME|MOMENTS LATER).*$/i, '').trim()
 }
 
 export function parseFountain(source) {
@@ -60,6 +60,7 @@ export function parseFountain(source) {
       else if (/^>.*<$/.test(text)) { type = 'centered'; content = text.slice(1, -1).trim() }
       else if (/^~/.test(text)) { type = 'lyric'; content = text.slice(1) }
       else if (/^!/.test(text)) { type = 'action'; content = text.slice(1); dialogue = false }
+      else if (/^(?:SHOT|VFX|SFX):(?:\s|$)/.test(text)) { type = 'action'; dialogue = false; group = null }
       else if (/^\.[\p{L}\p{N}]/u.test(text) || (prevBlank && scenePattern.test(text) && !next)) {
         type = 'scene'
         content = text.replace(/^\./, '')
@@ -100,11 +101,22 @@ export function escapeHtml(text) {
 export function inlineFountain(text) {
   const escaped = []
   let html = escapeHtml(text.replace(/\\([\\*_])/g, (_, c) => `\u0000${escaped.push(c) - 1}\u0000`))
+  html = html.replace(/(^|\n)(\s*)(SHOT:|VFX:|SFX:)/g, '$1$2<strong>$3</strong>')
+    .replace(/\((?:CONT(?:&#39;|’)D|V\.O\.|O\.S\.|O\.C\.)\)/g, '<strong>$&</strong>')
   html = html.replace(/\*\*\*(?=\S)(.+?\S|\S)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(?=\S)(.+?\S|\S)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*(?=\S)([^*\n]*?\S|[^*\s])\*(?!\*)/g, '<em>$1</em>')
     .replace(/_(?=\S)([^_\n]*?\S|[^_\s])_/g, '<u>$1</u>')
   return html.replace(/\u0000(\d+)\u0000/g, (_, n) => escapeHtml(escaped[Number(n)]))
+}
+
+export function screenplayEmphasis(text) {
+  const ranges = []
+  for (const match of text.matchAll(/(^|\n)(\s*!?)(SHOT:|VFX:|SFX:)|\((?:CONT['’]D|V\.O\.|O\.S\.|O\.C\.)\)/g)) {
+    const from = match.index + (match[3] ? match[1].length + match[2].length : 0)
+    ranges.push({ from, to: match.index + match[0].length })
+  }
+  return ranges
 }
 
 export function plainText(text) {

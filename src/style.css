@@ -39,6 +39,16 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .document-management-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .document-management-row strong { overflow-wrap: anywhere; font-weight: 500; }
 .room-unavailable { padding: 10px 14px; background: var(--accent-light); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; }
+.writer-name-nag { display: flex; flex-shrink: 0; align-items: center; gap: 10px; padding: 7px 14px; background: var(--accent-light); border-bottom: 1px solid var(--line); font-size: 12px; }
+.writer-name-nag label span { opacity: .75; }
+.writer-name-nag input { width: 150px; min-width: 0; }
+.writer-name-nag button { flex-shrink: 0; min-height: 36px; }
+@media (max-width: 760px) {
+  .writer-name-nag { gap: 8px; padding: 5px 10px; }
+  .writer-name-nag label { max-width: 90px; font-size: 11px; }
+  .writer-name-nag label span { display: none; }
+  .writer-name-nag input { flex: 1; width: 80px; }
+}
 .touch-popover-close { display: none; }
 .topbar { height: 65px; min-height: 65px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fbfbf8; border-bottom: 1px solid var(--line); padding: 0 23px 0 14px; position: relative; z-index: 20; }
 .document-controls { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
@@ -120,7 +130,7 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .live-editor .cm-content { width: 816px; max-width: calc(100% - 72px); min-height: calc(100% - 76px); margin: 38px auto; padding: 96px 96px 190px 144px; background: var(--paper); box-shadow: 0 1px 3px #34422412, 0 0 0 1px #e3e3da; caret-color: #3c5934; }
 .live-editor .cm-line { padding: 0; min-height: 22.5px; overflow-wrap: break-word; }
 .live-editor .ft-active { color: #34492d; background: #f0f3eb; border-radius: 2px; }
-.live-editor .ft-character.ft-rendered { padding-left: 38%; }
+.live-editor .ft-character.ft-rendered { padding-left: 38%; font-weight: 700; }
 .live-editor .ft-dialogue.ft-rendered { margin-left: 16.5%; margin-right: 18%; }
 .live-editor .ft-parenthetical.ft-rendered { margin-left: 25%; margin-right: 25%; }
 .live-editor .ft-scene.ft-rendered { font-weight: 700; }
@@ -186,7 +196,8 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .paper { font-family: var(--mono); font-size: 13px; line-height: 1.4; color: #34382e; background: var(--paper); min-height: 840px; padding: 62px 9% 80px 13%; width: 100%; max-width: 816px; margin: 0 auto; box-shadow: 0 1px 4px #34422412, 0 0 0 1px #e3e3da; }
 .fountain { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.4em; }
 .fountain.scene { font-weight: bold; position: relative; }
-.fountain.character { margin-left: 38%; }
+.fountain.character { margin-left: 38%; font-weight: 700; }
+.fountain strong, .live-editor .ft-character, .raw-editor .ft-character { font-weight: 700; }
 .fountain.dialogue { margin-left: 16.5%; margin-right: 18%; }
 .fountain.parenthetical { margin-left: 25%; margin-right: 25%; }
 .fountain.transition { text-align: right; }

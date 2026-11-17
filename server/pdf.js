@@ -6,22 +6,22 @@ const fontFor = run => `Courier${run.bold && run.italic ? '-BoldOblique' : run.b
 
 // Use the shared parser's restricted emphasis grammar, not an HTML renderer.
 // Literal HTML is escaped by inlineFountain and becomes ordinary PDF text.
-function runsFor(text) {
+function runsFor(text, bold = false) {
   const runs = [];
-  const style = { bold: false, italic: false, underline: false };
+  const style = { bold: bold ? 1 : 0, italic: 0, underline: 0 };
   for (const part of inlineFountain(text).split(/(<\/?(?:strong|em|u)>)/)) {
     const tag = /^<(\/?)(strong|em|u)>$/.exec(part);
-    if (tag) style[{ strong: 'bold', em: 'italic', u: 'underline' }[tag[2]]] = !tag[1];
-    else if (part) runs.push({ ...style, text: part.replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[entity])) });
+    if (tag) style[{ strong: 'bold', em: 'italic', u: 'underline' }[tag[2]]] += tag[1] ? -1 : 1;
+    else if (part) runs.push({ bold: style.bold > 0, italic: style.italic > 0, underline: style.underline > 0, text: part.replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[entity])) });
   }
   return runs;
 }
 
-function wrappedLines(pdf, text, width) {
+function wrappedLines(pdf, text, width, bold = false) {
   const lines = [[]];
   let used = 0;
   const nextLine = () => { lines.push([]); used = 0; };
-  for (const run of runsFor(text)) {
+  for (const run of runsFor(text, bold)) {
     pdf.font(fontFor(run));
     for (const token of run.text.match(/\n|[^\S\n]+|[^\s]+/g) || []) {
       if (token === '\n') { nextLine(); continue; }
@@ -98,7 +98,7 @@ export function writeScreenplay(pdf, text, title) {
           transition: { x: 108, width: 432, align: 'right' },
           centered: { x: 108, width: 432, align: 'center' },
         }[block.type] || { x: 108, width: 432 });
-    return wrappedLines(pdf, block.text, layout.width).map(line => ({ ...layout, line }));
+    return wrappedLines(pdf, block.text, layout.width, block.type === 'character').map(line => ({ ...layout, line }));
   };
   const groupEnd = start => {
     let end = start + 1;

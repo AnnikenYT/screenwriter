@@ -67,9 +67,61 @@ export function nameCompletions(doc, state, position) {
   return options.length ? { from: position - prefix.length, options, filter: true } : null
 }
 
+const headingPrefixes = ['EXT. ', 'INT. ', 'INT./EXT. ']
+const actionPrefixes = ['SHOT: ', 'VFX: ', 'SFX: ']
+const headingTimes = ['MORNING', 'NOON', 'DAY', 'EVENING', 'NIGHT', 'DAWN', 'DUSK', 'CONTINUOUS', 'LATER']
+const cueExtensions = ["(CONT'D)", '(V.O.)', '(O.S.)', '(O.C.)']
+
+export function screenplayCompletions(doc, state, position) {
+  const line = state.doc.lineAt(position)
+  const before = state.sliceDoc(line.from, position)
+  const blocks = state.field(parsedFountain, false) || parseFountain(state.doc.toString())
+  const block = blocks.find(block => line.number >= block.startLine && line.number <= block.endLine)
+  if (['title', 'note', 'boneyard'].includes(block?.type) || !state.selection.main.empty) return null
+  const previous = line.number > 1 ? state.doc.line(line.number - 1).text : ''
+  const heading = /^(?:INT\.?\/EXT\.?|INT\/EXT\.?|INT\.?|EXT\.?|EST\.?|I\/E\.?)\s+(.+)$/i.exec(before)
+  if (heading && previous.trim() && block?.type !== 'scene') return null
+  const result = (from, values, prefix, detail) => {
+    const options = values.filter(value => value.toUpperCase().startsWith(prefix.toUpperCase()) && value !== prefix)
+      .map(value => ({ label: value.trimEnd(), apply: value, type: 'keyword', detail }))
+    return options.length ? { from, options, filter: false } : null
+  }
+  // Extensions belong on cues, never in the dialogue immediately below them.
+  const name = characterName(before.replace(/\s*\([^)]*$/, ''))
+  const known = [...doc.getMap('characters').values()].some(sheet => sheet.name.toUpperCase() === name.toUpperCase())
+  const cueText = before.replace(/\([^)]*(?:\)|$)/g, '').trim()
+  const newCue = cueText.length <= 60 && /^(?=.*\p{Lu})[^\p{Ll}:]+$/u.test(cueText)
+  if (!heading && (block?.type === 'character' || (!previous.trim() && (known || newCue || before.trimStart().startsWith('@'))))) {
+    const extensions = cueExtensions.filter(value => !before.includes(value))
+    const extension = before.match(/\([^)]*$/)
+    if (extension) return result(line.from + extension.index, extensions, extension[0], 'Dialogue extension')
+    if (/\S\s+$/.test(before)) return result(position, extensions, '', 'Dialogue extension')
+  }
+  const names = nameCompletions(doc, state, position)
+  if (heading) {
+    // Replace the separator as a unit, so " - N" never becomes " -  - NIGHT".
+    const time = heading[1].match(/^(.+?\S)(\s+-\s*|\s+-?)([A-Za-z ]*)$/)
+    if (time && (!names || time[2].includes('-'))) {
+      const from = position - time[2].length - time[3].length
+      return result(from, headingTimes.map(value => ` - ${value}`), ` - ${time[3].toUpperCase()}`, 'Time of day')
+    }
+    return names
+  }
+  if (!previous.trim() && /^[A-Za-z./:]+$/.test(before)) {
+    const keywords = result(line.from, [...headingPrefixes, ...actionPrefixes], before, 'Screenplay')
+    if (keywords) return keywords
+  }
+  // Production labels can also start an action line within an action block.
+  if (block?.type === 'action' && /^[A-Za-z:]+$/.test(before)) {
+    const keywords = result(line.from, actionPrefixes, before, 'Production cue')
+    if (keywords) return keywords
+  }
+  return names
+}
+
 export function completeName(view, doc) {
   if (acceptCompletion(view)) { view.focus(); return true }
-  const result = nameCompletions(doc, view.state, view.state.selection.main.head)
+  const result = screenplayCompletions(doc, view.state, view.state.selection.main.head)
   if (!result) return false
   const completion = result.options[0]
   const insert = completion.apply || completion.label
@@ -122,7 +174,7 @@ export function insertParenthetical(view) {
 
 export function screenplayTools(doc, onImageLink) {
   return [
-    autocompletion({ override: [context => nameCompletions(doc, context.state, context.pos)], activateOnTyping: true }),
+    autocompletion({ override: [context => screenplayCompletions(doc, context.state, context.pos)], activateOnTyping: true }),
     keymap.of([
       { key: 'Mod-b', run: view => wrapSelection(view, '**', { toggle: true }) },
       { key: 'Mod-i', run: view => wrapSelection(view, '*', { toggle: true }) },

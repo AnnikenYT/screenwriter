@@ -53,11 +53,15 @@ test('guest display names persist without changing the session, identity, expiry
   try {
     const first = await fetch(`${server.base}/api/session`);
     const identity = await first.json();
+    assert.equal(identity.user.nameSet, false);
     const cookie = first.headers.get('set-cookie').split(';')[0];
     const other = await fetch(`${server.base}/api/session`);
     const otherIdentity = await other.json();
     const otherCookie = other.headers.get('set-cookie').split(';')[0];
     database = new DatabaseSync(path.join(dir, 'workspace.sqlite'));
+    // Older guests did not store whether a name was chosen explicitly.
+    const { nameSet, ...legacyOther } = otherIdentity.user;
+    database.prepare('UPDATE sessions SET user=? WHERE id=?').run(JSON.stringify(legacyOther), createHash('sha256').update(otherCookie.split('=')[1]).digest('hex'));
     const sessionId = createHash('sha256').update(cookie.split('=')[1]).digest('hex');
     const before = database.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);
     const patch = (name, extra = {}) => fetch(`${server.base}/api/session`, {
@@ -68,11 +72,11 @@ test('guest display names persist without changing the session, identity, expiry
     assert.equal(changed.status, 200);
     assert.equal(changed.headers.get('set-cookie'), null, 'the session cookie is not rotated');
     assert.equal(changed.headers.get('cache-control'), 'no-store');
-    assert.deepEqual(await changed.json(), { authMode: 'none', user: { ...identity.user, name: 'Ada Writer' } });
+    assert.deepEqual(await changed.json(), { authMode: 'none', user: { ...identity.user, name: 'Ada Writer', nameSet: true } });
     const after = database.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);
     assert.equal(after.id, before.id);
     assert.equal(after.expires, before.expires);
-    assert.deepEqual(JSON.parse(after.user), { ...identity.user, name: 'Ada Writer' });
+    assert.deepEqual(JSON.parse(after.user), { ...identity.user, name: 'Ada Writer', nameSet: true });
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 2);
     for (const invalid of [undefined, null, 42, {}, '', '   ', 'x'.repeat(61), 'Ada\nWriter', 'Ada\r\nInjected: yes', '\tAda', 'Ada\0', 'Ada\u007f', 'Ada\u0085', 'Ada\u2028Writer', 'Ada\u2029Writer', 'Ada\u202eWriter']) {
       const response = await patch(invalid);
@@ -81,18 +85,35 @@ test('guest display names persist without changing the session, identity, expiry
     }
     assert.equal((await patch('Cross-origin', { Origin: 'https://evil.example' })).status, 403);
     assert.equal((await patch('x'.repeat(60))).status, 200);
+    assert.equal((await (await patch('Writer abcd')).json()).user.nameSet, true);
     assert.equal((await patch('Ada Writer')).status, 200);
     assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie: otherCookie } })).json(), otherIdentity);
     database.close(); database = null;
     await server.close();
     server = await start(dir);
     assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie } })).json(),
-      { authMode: 'none', user: { ...identity.user, name: 'Ada Writer' } });
+      { authMode: 'none', user: { ...identity.user, name: 'Ada Writer', nameSet: true } });
   } finally {
     database?.close();
     await server.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('PDF keeps character cues and nested production emphasis bold', () => {
+  const calls = [];
+  let font = 'Courier';
+  const pdf = {
+    font(value) { font = value; return this; },
+    fontSize() { return this; },
+    widthOfString(value) { return value.length * 7.2; },
+    text(text) { calls.push({ text, font }); return this; },
+    addPage() { return this; },
+    bufferedPageRange() { return { start: 0, count: 2 }; },
+  };
+  writeScreenplay(pdf, "MARA (V.O.) (CONT'D)\nHello.\n\n**VFX: Bright effect.**", 'A screenplay');
+  assert.ok(calls.some(call => call.text === "MARA (V.O.) (CONT'D)" && call.font === 'Courier-Bold'));
+  assert.ok(calls.some(call => call.text === 'VFX: Bright effect.' && call.font === 'Courier-Bold'));
 });
 
 test('server reconciles current screenplay sheets and journals cleanup across restart', async () => {
