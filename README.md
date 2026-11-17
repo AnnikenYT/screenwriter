@@ -67,8 +67,10 @@ PUBLIC_URL=http://localhost:5173 npm run dev
 - Tests: `npx playwright install chromium`, then `npm run verify`.
 
 ## To-Do
-- [ ] Offline support
-- [ ] Themes?
+
+- [ ] [Offline support](https://github.com/AnnikenYT/screenwriter/issues/1)
+- [ ] [Themes](https://github.com/AnnikenYT/screenwriter/issues/2)
+- [ ] [Better Access Control/Per-User Workspace](https://github.com/AnnikenYT/screenwriter/issues/3)
 
 ## License
 
