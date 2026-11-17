@@ -13,7 +13,7 @@
 - Archive, restore, or delete screenplays from **Manage screenplays**; sheets have Active/Archived views and confirmed deletion without changing screenplay text.
 - Rename characters/locations across screenplay text, scratchpad, and sheet notes.
 - Shared Markdown scratchpad with preview.
-- Tab completion for character/location names; linked passage images on hover.
+- Automatic character/location suggestions while typing, with Tab or touch to accept; linked passage images on hover.
 - Formatting shortcuts, selection wrapping, and persistent light/dark themes.
 - Full-width phone editing, Write/Preview tabs, keyboard-aware sizing, and touch screenplay shortcuts.
 - Installable PWA with opt-in updates; only public assets are cached, never documents or identity.

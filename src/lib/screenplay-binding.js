@@ -71,9 +71,12 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
     let oldEnd = oldText.length, newEnd = model.text.length
     while (oldEnd > from && newEnd > from && oldText[oldEnd - 1] === model.text[newEnd - 1]) { oldEnd--; newEnd-- }
     const anchor = bookmark && restorePoint(bookmark.anchor), head = bookmark && restorePoint(bookmark.head)
+    const selection = view.state.selection.main
     view.dispatch({
       ...(oldText !== model.text ? { changes: { from, to: oldEnd, insert: model.text.slice(from, newEnd) } } : {}),
-      ...(anchor != null && head != null ? { selection: { anchor, head } } : {}),
+      // Presence echoes and metadata updates do not move the caret. Reasserting
+      // the same selection would cancel CodeMirror's typing-triggered completion.
+      ...(anchor != null && head != null && (oldText !== model.text || anchor !== selection.anchor || head !== selection.head) ? { selection: { anchor, head } } : {}),
       effects: refreshReview.of(null),
       annotations: remoteReview.of(true),
     })
