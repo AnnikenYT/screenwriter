@@ -12,3 +12,6 @@ blob-report
 coverage
 .cache
 *.sqlite*
+# README artwork and the unused design source aren't app assets.
+public/icons/banner-*.png
+public/icons/icon.svg

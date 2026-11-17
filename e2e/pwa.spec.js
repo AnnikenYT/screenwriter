@@ -38,7 +38,7 @@ test('production PWA registers public assets only and never caches workspace ide
   for (const entry of entries) {
     const url = new URL(entry.url)
     expect(url.search).toBe('')
-    expect(url.pathname).toMatch(/^\/(?:offline\.html|manifest\.webmanifest|icons\/(?:document(?:-\d+\.png|\.svg)|apple-touch-icon\.png)|assets\/[^/]+-[\w-]{8,}\.(?:js|css))$/)
+    expect(url.pathname).toMatch(/^\/(?:offline\.html|manifest\.webmanifest|icons\/(?:document(?:-\d+\.png|\.svg)|maskable-(?:192|512)\.png|icon-nobg-(?:light|dark)\.png|apple-touch-icon\.png)|assets\/[^/]+-[\w-]{8,}\.(?:js|css))$/)
     expect(entry.body).not.toContain(marker)
     expect(entry.url).not.toContain(document.id)
   }

@@ -1,6 +1,6 @@
 {
   "name": "screenplay-workspace",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "concurrently -k \"node --watch server/index.js\" \"vite --host 0.0.0.0\"",
     "build": "vite build",
+    "icons": "node build/icons.js",
     "start": "node server/index.js",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",

@@ -147,11 +147,14 @@ test('manifest, Apple metadata, maskable PNG dimensions and offline landing are 
     assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
     assert.equal(`${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`, icon.sizes)
   }
-  assert.ok(manifest.icons.every(icon => icon.purpose.includes('maskable')))
+  assert.ok(manifest.icons.some(icon => icon.purpose === 'maskable'))
+  assert.ok(manifest.icons.some(icon => icon.purpose === 'any'))
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8')
   assert.match(html, /viewport-fit=cover/)
   assert.match(html, /apple-touch-icon/)
   assert.match(html, /apple-mobile-web-app-capable/)
+  assert.match(html, /href="\/icons\/icon-nobg-dark.png" media="\(prefers-color-scheme: dark\)"/)
+  assert.match(html, /href="\/icons\/icon-nobg-light.png" media="\(prefers-color-scheme: light\)"/)
   const offline = await readFile(new URL('../public/offline.html', import.meta.url), 'utf8')
   assert.match(offline, /unsynced/)
   assert.match(offline, /href="\/">Retry/)
@@ -164,12 +167,13 @@ test('build plugin hashes content and excludes index, API-looking and unrelated 
     const output = path.join(root, 'dist')
     await mkdir(path.join(output, 'assets'), { recursive: true })
     await mkdir(path.join(output, 'icons'))
-    for (const name of ['offline.html', 'manifest.webmanifest', 'icons/document.svg', 'icons/document-192.png', 'icons/document-512.png', 'icons/apple-touch-icon.png']) {
+    for (const name of ['offline.html', 'manifest.webmanifest', 'icons/document-192.png', 'icons/document-512.png', 'icons/apple-touch-icon.png', 'icons/icon-nobg-light.png', 'icons/icon-nobg-dark.png', 'icons/maskable-192.png', 'icons/maskable-512.png']) {
       await writeFile(path.join(output, name), 'public asset')
     }
     for (const name of ['index.html', 'profile.json', 'assets/editor-abcdefgh.js', 'assets/main-12345678.css']) {
       await writeFile(path.join(output, name), name)
     }
+    await writeFile(path.join(output, 'icons/banner-nobg-dark.png'), 'README only')
     const plugin = pwaPlugin()
     plugin.configResolved({ root, build: { outDir: 'dist' } })
     await plugin.closeBundle()
@@ -178,6 +182,8 @@ test('build plugin hashes content and excludes index, API-looking and unrelated 
     assert.match(first, /main-12345678\.css/)
     const precache = JSON.parse(first.match(/const ASSETS = (.*);/)[1])
     assert.ok(!precache.includes('/index.html') && !precache.includes('/profile.json'))
+    assert.ok(!precache.some(asset => asset.includes('banner')))
+    assert.ok(precache.includes('/icons/icon-nobg-dark.png') && precache.includes('/icons/icon-nobg-light.png'))
     await writeFile(path.join(output, 'offline.html'), 'updated public content')
     await plugin.closeBundle()
     assert.notEqual(await readFile(path.join(output, 'sw.js'), 'utf8'), first)

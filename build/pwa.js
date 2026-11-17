@@ -92,8 +92,9 @@ export function pwaPlugin() {
     async closeBundle() {
       // Explicit public allowlist: adding unrelated public files cannot silently
       // expand the cache to include private data.
-      const publicAssets = ['/offline.html', '/manifest.webmanifest', '/icons/document.svg',
-        '/icons/document-192.png', '/icons/document-512.png', '/icons/apple-touch-icon.png']
+      const publicAssets = ['/offline.html', '/manifest.webmanifest',
+        '/icons/document-192.png', '/icons/document-512.png', '/icons/apple-touch-icon.png',
+        '/icons/icon-nobg-light.png', '/icons/icon-nobg-dark.png', '/icons/maskable-192.png', '/icons/maskable-512.png']
       const compiled = (await filesIn(output)).filter(name => /^assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(name))
       const assets = [...publicAssets, ...compiled.map(name => '/' + name)].sort()
       const hash = createHash('sha256')

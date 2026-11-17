@@ -12,11 +12,17 @@
     img { width: 4rem; height: 4rem; }
     h1 { font-size: 1.6rem; line-height: 1.2; }
     a { color: inherit; display: inline-block; padding: .6rem 1rem; border: 1px solid currentColor; border-radius: .4rem; }
+    @media (prefers-color-scheme: dark) {
+      html { color-scheme: dark; background: #20261d; color: #dae2d2; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <img src="/icons/document.svg" alt="">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="/icons/icon-nobg-dark.png">
+      <img src="/icons/icon-nobg-light.png" alt="">
+    </picture>
     <h1>Reconnect to open your documents</h1>
     <p>Screenplay needs a connection to load documents and sync changes. Only this public landing page and app assets are available offline; your documents are not stored for offline access.</p>
     <p>Keep any open tabs with unsynced changes open. Don’t reload or close those tabs until they reconnect and finish syncing.</p>
