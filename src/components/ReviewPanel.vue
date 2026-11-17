@@ -25,7 +25,7 @@ function addComment(parentId) {
   if (!text) return
   const id = crypto.randomUUID()
   const selected = props.selection || { from: 0, to: 0, text: '' }
-  props.doc.getMap('comments').set(id, { id, parentId: parentId || null, text, quote: selected.text, anchor: relativeAnchor(props.doc, selected.from, selected.to), author: props.user.name, createdAt: Date.now(), resolved: false })
+  props.doc.getMap('comments').set(id, { id, parentId: parentId || null, text, quote: selected.text, anchor: relativeAnchor(props.doc, selected.from, selected.to), author: props.user.name, authorId: props.user.id, createdAt: Date.now(), resolved: false })
   if (parentId) replies.value[parentId] = ''
   else draft.value = ''
 }
@@ -39,7 +39,7 @@ function submitSuggestion() {
   }
   if (selected.text === replacement.value) return
   const id = crypto.randomUUID()
-  props.doc.getMap('suggestions').set(id, { id, original: selected.text, replacement: replacement.value, anchor: relativeAnchor(props.doc, selected.from, selected.to), author: props.user.name, createdAt: Date.now(), status: 'pending' })
+  props.doc.getMap('suggestions').set(id, { id, original: selected.text, replacement: replacement.value, anchor: relativeAnchor(props.doc, selected.from, selected.to), author: props.user.name, authorId: props.user.id, createdAt: Date.now(), status: 'pending' })
   replacement.value = ''; proposedSelection.value = null
 }
 async function decide(suggestion, status) {

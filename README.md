@@ -7,11 +7,13 @@
 ## Features
 
 - Live formatting: edit a line's source; render it when leaving. Multiline blocks stay editable until the cursor is two lines below.
-- Split view: highlighted Fountain source and live preview.
-- Live collaboration with shared cursors, anchored comments, replies, and edit suggestions.
-- Automatic character/location sheets, linked scenes, Markdown fields, and image moodboards.
+- Split view: highlighted source, live preview, and two-way synchronized scrolling.
+- Live collaboration, line-side comment bubbles, replies, and inline edit suggestions with hover-to-review.
+- Automatic character/location sheets, unused-sheet cleanup, Markdown fields, and image moodboards.
 - Rename characters/locations across screenplay text, scratchpad, and sheet notes.
 - Shared Markdown scratchpad with preview.
+- Tab completion for character/location names; linked passage images on hover.
+- Formatting shortcuts, selection wrapping, and persistent light/dark themes.
 - Named versions, automatic snapshots, and restore with a backup.
 - Fountain import/export and screenplay PDF export, including dual dialogue.
 
@@ -31,6 +33,7 @@ docker compose up -d
 ## Authentication
 
 - **`AUTH_MODE=none`** (default): everyone who can reach the server can access **all documents**.
+  - Click your avatar to choose a writer name.
 - **`AUTH_MODE=oauth`**: sign in through an OpenID Connect provider.
   - Set `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET`.
   - Register callback: `${PUBLIC_URL}/auth/callback`.
@@ -58,7 +61,8 @@ PUBLIC_URL=http://localhost:5173 npm run dev
 
 - Requires Node **24+**; open **http://localhost:5173**.
 - Tests: `npx playwright install chromium`, then `npm run verify`.
-- Shortcuts: Ctrl/⌘ **F** search · **Z** undo · **Shift Z** redo · **Alt M** comment.
+- Shortcuts: Ctrl/⌘ **B/I/U** bold/italic/underline · **Shift K** image · **F** search · **Z** undo · **Shift Z** redo · **Alt M** comment.
+- Select text and type `*`, `_`, or `[` to surround it; press Tab to complete a name.
 
 ## License
 

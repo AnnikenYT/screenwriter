@@ -46,6 +46,133 @@ function resolve(doc, anchor) {
   return ['start', 'end'].map(key => Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(anchor[key]), doc)?.index);
 }
 
+test('guest display names persist without changing the session, identity, expiry or other users', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-names-'));
+  let server = await start(dir);
+  let database;
+  try {
+    const first = await fetch(`${server.base}/api/session`);
+    const identity = await first.json();
+    const cookie = first.headers.get('set-cookie').split(';')[0];
+    const other = await fetch(`${server.base}/api/session`);
+    const otherIdentity = await other.json();
+    const otherCookie = other.headers.get('set-cookie').split(';')[0];
+    database = new DatabaseSync(path.join(dir, 'workspace.sqlite'));
+    const sessionId = createHash('sha256').update(cookie.split('=')[1]).digest('hex');
+    const before = database.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);
+    const patch = (name, extra = {}) => fetch(`${server.base}/api/session`, {
+      method: 'PATCH', headers: { cookie, 'Content-Type': 'application/json', ...extra },
+      body: JSON.stringify({ name }),
+    });
+    const changed = await patch('  Ada Writer  ');
+    assert.equal(changed.status, 200);
+    assert.equal(changed.headers.get('set-cookie'), null, 'the session cookie is not rotated');
+    assert.equal(changed.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await changed.json(), { authMode: 'none', user: { ...identity.user, name: 'Ada Writer' } });
+    const after = database.prepare('SELECT * FROM sessions WHERE id=?').get(sessionId);
+    assert.equal(after.id, before.id);
+    assert.equal(after.expires, before.expires);
+    assert.deepEqual(JSON.parse(after.user), { ...identity.user, name: 'Ada Writer' });
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 2);
+    for (const invalid of [undefined, null, 42, {}, '', '   ', 'x'.repeat(61), 'Ada\nWriter', 'Ada\r\nInjected: yes', '\tAda', 'Ada\0', 'Ada\u007f', 'Ada\u0085', 'Ada\u2028Writer', 'Ada\u2029Writer', 'Ada\u202eWriter']) {
+      const response = await patch(invalid);
+      assert.equal(response.status, 400, `invalid name ${JSON.stringify(invalid)}`);
+      assert.match((await response.json()).error, /Name must/);
+    }
+    assert.equal((await patch('Cross-origin', { Origin: 'https://evil.example' })).status, 403);
+    assert.equal((await patch('x'.repeat(60))).status, 200);
+    assert.equal((await patch('Ada Writer')).status, 200);
+    assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie: otherCookie } })).json(), otherIdentity);
+    database.close(); database = null;
+    await server.close();
+    server = await start(dir);
+    assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie } })).json(),
+      { authMode: 'none', user: { ...identity.user, name: 'Ada Writer' } });
+  } finally {
+    database?.close();
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('server reconciles current screenplay sheets and journals cleanup across restart', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-sheets-'));
+  let server = await start(dir);
+  const peers = [];
+  const source = 'INT. ROOM - DAY\n\nALICE\nHello.\n\nBOB\nGoodbye.\n\nEXT. GARDEN - NIGHT\n\nQuiet.';
+  try {
+    const { id } = await (await fetch(`${server.base}/api/documents`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: source }),
+    })).json();
+    const a = connect(server.base, id), b = connect(server.base, id);
+    peers.push(a, b);
+    await waitFor(() => a.provider.synced && b.provider.synced);
+    const characters = a.doc.getMap('characters'), locations = a.doc.getMap('locations'), meta = a.doc.getMap('meta');
+    assert.equal(characters.size, 2, 'creation discovers speaking characters');
+    assert.equal(locations.size, 2, 'creation discovers scene locations');
+    const alice = [...characters.values()].find(sheet => sheet.name === 'ALICE');
+    const bob = [...characters.values()].find(sheet => sheet.name === 'BOB');
+    const room = [...locations.values()].find(sheet => sheet.name === 'ROOM');
+    const garden = [...locations.values()].find(sheet => sheet.name === 'GARDEN');
+    const aliceNotes = `sheet:characters:${alice.id}:notes`;
+    const bobNotes = `sheet:characters:${bob.id}:notes`;
+    const roomNotes = `sheet:locations:${room.id}:notes`;
+    const gardenNotes = `sheet:locations:${garden.id}:notes`;
+    a.doc.transact(() => {
+      meta.set(aliceNotes, 'Keep Alice');
+      meta.set(bobNotes, 'Remove Bob');
+      meta.set(roomNotes, 'Keep room');
+      meta.set(gardenNotes, 'Remove garden');
+      const text = a.doc.getText('screenplay');
+      text.delete(0, text.length);
+      text.insert(0, 'INT. ROOM - DAY\n\nALICE\nHello.\n\n!Someone leaves the garden.');
+    });
+    await waitFor(() => !b.doc.getMap('characters').has(bob.id) && !b.doc.getMap('locations').has(garden.id));
+    assert.equal(b.doc.getMap('meta').has(bobNotes), false);
+    assert.equal(b.doc.getMap('meta').has(gardenNotes), false);
+    assert.equal(b.doc.getMap('meta').get(aliceNotes), 'Keep Alice');
+    assert.equal(b.doc.getMap('meta').get(roomNotes), 'Keep room');
+    assert.equal(b.doc.getMap('characters').get(alice.id).name, 'ALICE');
+    a.doc.transact(() => {
+      const text = a.doc.getText('screenplay');
+      const from = text.toString().indexOf('ALICE');
+      text.delete(from, 'ALICE'.length);
+      text.insert(from, 'ADA');
+      characters.set(alice.id, { ...characters.get(alice.id), name: 'ADA' });
+    }, 'rename');
+    await waitFor(() => b.doc.getMap('characters').get(alice.id)?.name === 'ADA');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    assert.equal(b.doc.getMap('characters').size, 1);
+    assert.equal(b.doc.getMap('characters').get(alice.id).name, 'ADA', 'atomic rename keeps its stable ID');
+    assert.equal(b.doc.getMap('meta').get(aliceNotes), 'Keep Alice');
+    // Simulate an orphan left by an older client. Map-only changes do not
+    // reschedule source parsing, but loading the room must repair old data.
+    a.doc.transact(() => {
+      characters.set('old-orphan', { id: 'old-orphan', name: 'ABSENT' });
+      meta.set('sheet:characters:old-orphan:notes', 'Legacy notes');
+    });
+    await waitFor(() => b.doc.getMap('characters').has('old-orphan'));
+    peers.forEach(peer => peer.close()); peers.length = 0;
+    await server.close();
+    server = await start(dir);
+    const restored = connect(server.base, id);
+    peers.push(restored);
+    await waitFor(() => restored.provider.synced);
+    assert.equal(restored.doc.getMap('characters').has(bob.id), false);
+    assert.equal(restored.doc.getMap('locations').has(garden.id), false);
+    assert.equal(restored.doc.getMap('meta').has(bobNotes), false);
+    assert.equal(restored.doc.getMap('meta').has(gardenNotes), false);
+    assert.equal(restored.doc.getMap('characters').get(alice.id).name, 'ADA');
+    assert.equal(restored.doc.getMap('meta').get(aliceNotes), 'Keep Alice');
+    await waitFor(() => !restored.doc.getMap('characters').has('old-orphan'));
+    assert.equal(restored.doc.getMap('meta').has('sheet:characters:old-orphan:notes'), false);
+  } finally {
+    peers.forEach(peer => peer.close());
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable restart', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-test-'));
   const dataDir = path.join(dir, '.private', 'data');
@@ -68,8 +195,10 @@ test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable resta
     }
     assert.ok(policy.includes("script-src 'self'"));
     assert.ok(policy.includes("style-src 'self' 'unsafe-inline'"));
+    assert.ok(policy.includes("img-src 'self' data: https:"));
+    assert.ok(!policy.includes("script-src 'self' https:"), 'external images do not enable external scripts');
     assert.ok(policy.includes("frame-ancestors 'none'"));
-    const create = await fetch(`${server.base}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Test film', text: 'INT. ROOM - DAY\n\nA story begins.' }) });
+    const create = await fetch(`${server.base}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Test film', text: 'INT. ROOM - DAY\n\nA story begins.\n\nHERO\nHello.' }) });
     assert.equal(create.status, 201);
     const { id } = await create.json();
     assert.equal((await (await fetch(`${server.base}/api/documents`)).json())[0].id, id);
@@ -80,9 +209,15 @@ test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable resta
     const from = a.doc.getText('screenplay').toString().indexOf('story');
     a.doc.transact(() => {
       a.doc.getText('scratchpad').insert(0, 'An idea');
-      a.doc.getMap('characters').set('hero', { name: 'Hero', description: 'Brave' });
+      a.doc.getMap('characters').set('characters-HERO', { id: 'characters-HERO', name: 'Hero', description: 'Brave' });
       a.doc.getMap('comments').set('c1', { text: 'Keep this', resolved: false, anchor: anchorFor(a.doc, from, from + 5) });
       a.doc.getMap('suggestions').set('s1', { replacement: 'film', status: 'pending', anchor: anchorFor(a.doc, from, from + 5) });
+      a.doc.getMap('meta').set('image-link:reference', {
+        id: 'reference', url: 'https://images.example.com/story.jpg', caption: 'Story reference',
+        quote: 'story', anchor: anchorFor(a.doc, from, from + 5),
+        author: identity.user.name, authorId: identity.user.id, createdAt: 123,
+      });
+      a.doc.getMap('meta').set('image-link:detached', { id: 'detached', url: '/uploads/missing.png', anchor: {} });
     });
     await waitFor(() => b.doc.getText('scratchpad').toString() === 'An idea');
     a.provider.awareness.setLocalStateField('user', { name: 'Test' });
@@ -94,15 +229,25 @@ test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable resta
       a.doc.getText('scratchpad').delete(0, a.doc.getText('scratchpad').length);
       a.doc.getMap('characters').clear();
       a.doc.getMap('comments').clear();
+      a.doc.getMap('meta').delete('image-link:reference');
+      a.doc.getMap('meta').delete('image-link:detached');
     });
     await waitFor(() => b.doc.getText('screenplay').toString().startsWith('Changed!'));
     assert.equal((await fetch(`${server.base}/api/documents/${id}/versions/${saved.id}/restore`, { method: 'POST' })).status, 200);
     await waitFor(() => !a.doc.getText('screenplay').toString().startsWith('Changed!'));
     assert.equal(a.doc.getText('scratchpad').toString(), 'An idea');
-    assert.equal(a.doc.getMap('characters').get('hero').name, 'Hero');
+    assert.equal(a.doc.getMap('characters').get('characters-HERO').name, 'Hero');
     assert.equal(a.doc.getMap('comments').get('c1').text, 'Keep this');
     assert.deepEqual(resolve(a.doc, a.doc.getMap('comments').get('c1').anchor), [from, from + 5]);
     assert.deepEqual(resolve(a.doc, a.doc.getMap('suggestions').get('s1').anchor), [from, from + 5]);
+    const imageLink = a.doc.getMap('meta').get('image-link:reference');
+    assert.deepEqual(resolve(a.doc, imageLink.anchor), [from, from + 5], 'restored image links anchor to the restored live text');
+    assert.equal(a.doc.getText('screenplay').toString().slice(...resolve(a.doc, imageLink.anchor)), imageLink.quote);
+    assert.deepEqual({ ...imageLink, anchor: null }, {
+      id: 'reference', url: 'https://images.example.com/story.jpg', caption: 'Story reference', quote: 'story',
+      anchor: null, author: identity.user.name, authorId: identity.user.id, createdAt: 123,
+    });
+    assert.equal(a.doc.getMap('meta').get('image-link:detached').anchor, null, 'invalid historical image anchors remain detached');
     assert.equal(a.doc.getText('screenplay').toString().slice(...resolve(a.doc, a.doc.getMap('comments').get('c1').anchor)), 'story');
     const versions = await (await fetch(`${server.base}/api/documents/${id}/versions`)).json();
     assert.ok(versions.some(v => v.label === 'Before restore'));
@@ -148,8 +293,9 @@ test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable resta
     await waitFor(() => persisted.provider.synced);
     assert.match(persisted.doc.getText('screenplay').toString(), /A story begins/);
     assert.equal(persisted.doc.getText('scratchpad').toString(), 'An idea');
-    assert.equal(persisted.doc.getMap('characters').get('hero').name, 'Hero');
+    assert.equal(persisted.doc.getMap('characters').get('characters-HERO').name, 'Hero');
     assert.deepEqual(resolve(persisted.doc, persisted.doc.getMap('comments').get('c1').anchor), [from, from + 5]);
+    assert.deepEqual(resolve(persisted.doc, persisted.doc.getMap('meta').get('image-link:reference').anchor), [from, from + 5]);
     assert.equal((await fetch(`${server.base}${image.url}`)).status, 200);
   } finally {
     peers.forEach(peer => peer.close());
@@ -164,6 +310,7 @@ test('OAuth denies protected HTTP routes, uploads and websocket upgrades', async
   try {
     const session = await (await fetch(`${server.base}/api/session`)).json();
     assert.deepEqual(session, { authMode: 'oauth', user: null });
+    assert.equal((await fetch(`${server.base}/api/session`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed' }) })).status, 403);
     for (const route of ['/api/documents', '/api/documents/anything/versions', '/api/documents/anything/export.pdf', '/uploads/test.png']) {
       assert.equal((await fetch(`${server.base}${route}`)).status, 401);
     }
@@ -222,6 +369,7 @@ test('OIDC authorization code, PKCE, signed identity, domain restriction and log
     const cookie = callback.headers.getSetCookie().find(x => x.startsWith('screenplay_session=')).split(';')[0];
     const user = await (await fetch(`${server.base}/api/session`, { headers: { cookie } })).json();
     assert.equal(user.user.name, 'Alice');
+    assert.equal((await fetch(`${server.base}/api/session`, { method: 'PATCH', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed' }) })).status, 403);
     assert.equal((await fetch(`${server.base}/api/documents`, { headers: { cookie } })).status, 200);
     assert.equal((await fetch(callbackURL, { headers: { cookie: loginCookie }, redirect: 'manual' })).status, 400);
     const { id } = await (await fetch(`${server.base}/api/documents`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}' })).json();
@@ -371,7 +519,9 @@ test('concurrent suggestion decisions apply replacement once and reject stale so
     });
     await waitFor(() => b.doc.getMap('suggestions').has('broken'));
     assert.equal((await decide('stale', 'accepted')).status, 409);
+    assert.equal((await decide('stale', 'rejected')).status, 200, 'stale proposals can always be dismissed');
     assert.equal((await decide('broken', 'accepted')).status, 409);
+    assert.equal((await decide('broken', 'rejected')).status, 200, 'detached proposals can always be dismissed');
     assert.equal((await decide('reject', 'rejected')).status, 200);
     await waitFor(() => b.doc.getMap('suggestions').get('reject').status === 'rejected');
     assert.equal(b.doc.getText('screenplay').toString(), 'The dog waits.');
@@ -384,6 +534,96 @@ test('concurrent suggestion decisions apply replacement once and reject stale so
     assert.equal((await decide('insert', 'accepted')).status, 409);
     assert.equal((await decide('missing', 'accepted')).status, 404);
     assert.equal((await decide('missing', 'invalid')).status, 400);
+  } finally {
+    peers.forEach(peer => peer.close());
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('suggestion decisions preserve proposal and existing annotation ranges without touching other suggestions', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-annotation-decisions-'));
+  const server = await start(dir);
+  const peers = [];
+  try {
+    const { id } = await (await fetch(`${server.base}/api/documents`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'The cat waits.' }),
+    })).json();
+    const a = connect(server.base, id), b = connect(server.base, id);
+    peers.push(a, b);
+    await waitFor(() => a.provider.synced && b.provider.synced);
+    const text = a.doc.getText('screenplay'), comments = a.doc.getMap('comments'), meta = a.doc.getMap('meta'), suggestions = a.doc.getMap('suggestions');
+    const decide = (suggestionId, decision = 'accepted') => fetch(`${server.base}/api/documents/${id}/suggestions/${suggestionId}/decide`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
+    });
+    const full = anchorFor(a.doc, 4, 7), outside = anchorFor(a.doc, 8, 13);
+    const otherSuggestion = { status: 'pending', original: 'cat', replacement: 'rat', anchor: full };
+    a.doc.transact(() => {
+      suggestions.set('replace', { status: 'pending', original: 'cat', replacement: 'tiger', anchor: full });
+      suggestions.set('other', otherSuggestion);
+      comments.set('ordinary', { text: 'Whole word', anchor: full });
+      comments.set('partial', { text: 'Partial word', anchor: anchorFor(a.doc, 5, 6) });
+      comments.set('spanning', { text: 'Spanning range', anchor: anchorFor(a.doc, 2, 9) });
+      comments.set('outside', { text: 'Outside word', anchor: outside });
+      comments.set('proposal', { text: 'Replacement letters', anchor: full, proposal: { id: 'replace', from: 1, to: 4 } });
+      meta.set('image-link:ordinary', { url: 'https://images.example.com/cat.jpg', anchor: full });
+      meta.set('image-link:proposal', { url: 'https://images.example.com/tiger.jpg', anchor: full, proposal: { id: 'replace', from: 1, to: 4 } });
+      meta.set('image-link:clamped', { url: 'https://images.example.com/full.jpg', anchor: full, proposal: { id: 'replace', from: -50, to: 500 } });
+    });
+    await waitFor(() => b.doc.getMap('meta').has('image-link:clamped'));
+    const decisions = await Promise.all([decide('replace'), decide('replace')]);
+    assert.deepEqual(decisions.map(response => response.status).sort(), [200, 409]);
+    await waitFor(() => b.doc.getMap('suggestions').get('replace')?.status === 'accepted');
+    assert.equal(text.toString(), 'The tiger waits.');
+    assert.deepEqual(resolve(a.doc, comments.get('ordinary').anchor), [4, 9]);
+    assert.deepEqual(resolve(a.doc, meta.get('image-link:ordinary').anchor), [4, 9]);
+    assert.deepEqual(resolve(a.doc, comments.get('partial').anchor), [5, 6]);
+    assert.deepEqual(resolve(a.doc, comments.get('spanning').anchor), [2, 11]);
+    assert.deepEqual(resolve(a.doc, comments.get('outside').anchor), [10, 15]);
+    assert.deepEqual(comments.get('outside').anchor, outside, 'nonoverlapping relative anchors are not rewritten');
+    assert.deepEqual(resolve(a.doc, comments.get('proposal').anchor), [5, 8]);
+    assert.deepEqual(resolve(a.doc, meta.get('image-link:proposal').anchor), [5, 8]);
+    assert.deepEqual(resolve(a.doc, meta.get('image-link:clamped').anchor), [4, 9]);
+    assert.equal(Object.hasOwn(comments.get('proposal'), 'proposal'), false);
+    assert.equal(Object.hasOwn(meta.get('image-link:proposal'), 'proposal'), false);
+    assert.deepEqual(suggestions.get('other'), otherSuggestion, 'other suggestion anchors and stale-source safeguards are unchanged');
+    assert.equal((await decide('other')).status, 409);
+
+    const end = text.length, insertionAnchor = anchorFor(a.doc, end, end);
+    a.doc.transact(() => {
+      suggestions.set('insert', { status: 'pending', original: '', replacement: ' A😀B.', anchor: insertionAnchor });
+      comments.set('insert', { text: 'New text', anchor: insertionAnchor, proposal: { id: 'insert', from: 1, to: 4 } });
+      meta.set('image-link:insert', { url: 'https://images.example.com/new.jpg', anchor: insertionAnchor, proposal: { id: 'insert', from: 1, to: 4 } });
+    });
+    await waitFor(() => b.doc.getMap('meta').has('image-link:insert'));
+    assert.equal((await decide('insert')).status, 200);
+    await waitFor(() => b.doc.getMap('suggestions').get('insert')?.status === 'accepted');
+    for (const value of [comments.get('insert'), meta.get('image-link:insert')]) {
+      assert.deepEqual(resolve(a.doc, value.anchor), [end + 1, end + 4]);
+      assert.equal(text.toString().slice(...resolve(a.doc, value.anchor)), 'A😀', 'proposal offsets count UTF-16 code units');
+      assert.equal(Object.hasOwn(value, 'proposal'), false);
+    }
+
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const form = new FormData();
+    form.append('image', new Blob([png], { type: 'image/png' }), 'reference.png');
+    const upload = await (await fetch(`${server.base}/api/documents/${id}/images`, { method: 'POST', body: form })).json();
+    const historicalAnchor = anchorFor(a.doc, 10, 15);
+    a.doc.transact(() => {
+      suggestions.set('reject', { status: 'pending', original: 'waits', replacement: 'runs', anchor: historicalAnchor });
+      comments.set('reject', { text: 'Historical discussion', anchor: historicalAnchor, proposal: { id: 'reject', from: 0, to: 4 } });
+      meta.set('image-link:reject', { url: upload.url, anchor: historicalAnchor, proposal: { id: 'reject', from: 0, to: 4 } });
+    });
+    await waitFor(() => b.doc.getMap('meta').has('image-link:reject'));
+    const beforeRejection = text.toString();
+    assert.equal((await decide('reject', 'rejected')).status, 200);
+    await waitFor(() => b.doc.getMap('suggestions').get('reject')?.status === 'rejected');
+    assert.equal(text.toString(), beforeRejection);
+    assert.deepEqual(comments.get('reject'), { text: 'Historical discussion', anchor: JSON.parse(JSON.stringify(historicalAnchor)) });
+    assert.deepEqual(resolve(a.doc, comments.get('reject').anchor), [10, 15]);
+    assert.equal(meta.has('image-link:reject'), false);
+    assert.equal(meta.has('image-link:ordinary'), true);
+    assert.deepEqual(Buffer.from(await (await fetch(`${server.base}${upload.url}`)).arrayBuffer()), png, 'rejection does not delete an uploaded image file');
   } finally {
     peers.forEach(peer => peer.close());
     await server.close();

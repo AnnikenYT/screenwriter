@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { renderPDF } from './pdf.js';
+import { reconcileSheets } from '../shared/entities.js';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,8 +83,10 @@ export function createWorkspace(options = {}) {
   }
   function setSession(res, user) {
     const raw = token();
-    db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(sha(raw), JSON.stringify(user), Date.now() + sessionAge);
+    const key = sha(raw);
+    db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(key, JSON.stringify(user), Date.now() + sessionAge);
     res.cookie(cookieName, raw, { httpOnly: true, secure: publicURL.protocol === 'https:', sameSite: 'lax', maxAge: sessionAge, path: '/' });
+    return key;
   }
   const allowedOrigin = req => !req.headers.origin || req.headers.origin === publicURL.origin;
   app.use((req, res, next) => {
@@ -97,15 +100,26 @@ export function createWorkspace(options = {}) {
   });
   app.use((req, res, next) => {
     req.user = session(req);
+    req.sessionKey = sessionKey(req);
     if (!req.user && authMode === 'none') {
       req.user = { id: randomUUID(), name: `Writer ${randomBytes(2).toString('hex')}`, color: ['#c2410c', '#2563eb', '#7c3aed', '#047857'][randomBytes(1)[0] % 4] };
-      setSession(res, req.user);
+      req.sessionKey = setSession(res, req.user);
     }
     next();
   });
   app.get('/api/session', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ authMode, user: req.user || null });
+  });
+  app.patch('/api/session', (req, res) => {
+    if (authMode !== 'none') throw fail(403, 'Display names are managed by your identity provider');
+    const name = req.body?.name;
+    if (typeof name !== 'string' || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name) ||
+      name.trim().length < 1 || name.trim().length > 60) throw fail(400, 'Name must be 1–60 characters on one line, without control characters');
+    const user = { ...req.user, name: name.trim() };
+    db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ authMode, user });
   });
   let discoveryPromise;
   async function discovery() {
@@ -183,6 +197,25 @@ export function createWorkspace(options = {}) {
   }
   app.use(['/api', '/uploads'], requireUser, (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
   const documents = new Map();
+  function scheduleReconciliation(entry) {
+    clearTimeout(entry.reconcileTimer);
+    entry.reconcileTimer = setTimeout(() => {
+      entry.reconcileTimer = null;
+      if (documents.get(entry.id) !== entry) return;
+      // Out-of-order Yjs deltas may be waiting on earlier client structs.
+      // Never prune sheets against that incomplete source.
+      if (entry.doc.store.pendingStructs || entry.doc.store.pendingDs) {
+        scheduleReconciliation(entry);
+        return;
+      }
+      try { reconcileSheets(entry.doc); }
+      catch (error) {
+        console.error('Sheet reconciliation failed:', error.message);
+        discardRoom(entry.id, entry);
+      }
+    }, 800);
+    entry.reconcileTimer.unref();
+  }
   function titleOf(doc) { return String(doc.getMap('meta').get('title') || 'Untitled screenplay').slice(0, 200); }
   function prune() {
     for (const [id, entry] of documents) {
@@ -190,6 +223,7 @@ export function createWorkspace(options = {}) {
       if (!entry.clients.size) {
         if (entry.dirty) snapshot(id, 'Automatic snapshot');
         else compact(id, entry);
+        clearTimeout(entry.reconcileTimer);
         entry.awareness.destroy(); entry.doc.destroy(); documents.delete(id);
       }
     }
@@ -216,6 +250,8 @@ export function createWorkspace(options = {}) {
       persistUpdate(id, entry, update);
       broadcastUpdate(entry, update);
     });
+    doc.getText('screenplay').observe(() => scheduleReconciliation(entry));
+    scheduleReconciliation(entry);
     awareness.on('update', ({ added, updated, removed }, origin) => {
       if (entry.clients.has(origin)) {
         const ids = entry.clients.get(origin);
@@ -259,6 +295,7 @@ export function createWorkspace(options = {}) {
     // Malformed semantic updates can partially mutate Yjs. Never journal or
     // broadcast them: drop the room and reconnect from the last durable state.
     documents.delete(id);
+    clearTimeout(entry.reconcileTimer);
     for (const ws of entry.clients.keys()) ws.close(1008, 'Room reset after invalid update');
     entry.awareness.destroy();
     entry.doc.destroy();
@@ -323,6 +360,7 @@ export function createWorkspace(options = {}) {
     const doc = new Y.Doc(), id = randomUUID();
     doc.getText('screenplay').insert(0, text);
     doc.getMap('meta').set('title', title);
+    reconcileSheets(doc);
     db.prepare('INSERT INTO documents VALUES(?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now());
     doc.destroy();
     res.status(201).json({ id, title });
@@ -353,7 +391,7 @@ export function createWorkspace(options = {}) {
         const target = entry.doc.getMap(name);
         target.clear();
         for (const [key, value] of old.getMap(name)) {
-          if (['comments', 'suggestions'].includes(name) && value?.anchor) {
+          if ((['comments', 'suggestions'].includes(name) || (name === 'meta' && key.startsWith('image-link:'))) && value?.anchor) {
             let anchor = null;
             try {
               const start = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(value.anchor.start), old);
@@ -388,17 +426,62 @@ export function createWorkspace(options = {}) {
       start = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(suggestion.anchor.start), doc);
       end = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(suggestion.anchor.end), doc);
     } catch { /* Invalid anchors are treated as stale, never as index zero. */ }
-    if (typeof suggestion.original !== 'string' || typeof suggestion.replacement !== 'string' ||
+    if (decision === 'accepted' && (typeof suggestion.original !== 'string' || typeof suggestion.replacement !== 'string' ||
       !start || !end || start.type !== text || end.type !== text || end.index < start.index ||
-      text.toString().slice(start.index, end.index) !== suggestion.original) throw fail(409, 'Suggestion source has changed or its anchor is stale');
+      text.toString().slice(start.index, end.index) !== suggestion.original)) throw fail(409, 'Suggestion source has changed or its anchor is stale');
     if (decision === 'accepted' && (Buffer.byteLength(suggestion.replacement) > maxUpdate ||
       text.length - (end.index - start.index) + suggestion.replacement.length > maxDocument)) throw fail(413, 'Replacement exceeds source limits');
+    // Resolve annotations before deleting their source structs. Relative
+    // anchors alone cannot distinguish a replaced selection from tombstones.
+    const annotations = [];
+    for (const name of ['comments', 'meta']) {
+      const map = doc.getMap(name);
+      for (const [key, value] of map) {
+        if ((name === 'meta' && !key.startsWith('image-link:')) || !value || typeof value !== 'object') continue;
+        if (value.proposal?.id === req.params.suggestionId) {
+          annotations.push({ map, key, value, proposal: true, image: name === 'meta' });
+        } else if (decision === 'accepted' && !value.proposal) {
+          try {
+            const a = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(value.anchor.start), doc);
+            const b = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(value.anchor.end), doc);
+            if (a?.type === text && b?.type === text && a.index <= b.index &&
+              a.index < end.index && b.index > start.index) annotations.push({ map, key, value, from: a.index, to: b.index });
+          } catch { /* Detached annotations stay detached. */ }
+        }
+      }
+    }
+    const replacementLength = typeof suggestion.replacement === 'string' ? suggestion.replacement.length : 0;
+    const clampOffset = (value, fallback) => Number.isFinite(value) ? Math.max(0, Math.min(replacementLength, Math.trunc(value))) : fallback;
+    const anchorAt = (index, assoc) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, index, assoc));
+    const translateEndpoint = (index, original, assoc) => {
+      if (index < start.index || index > end.index) return original;
+      const offset = index === end.index ? replacementLength : Math.min(replacementLength, index - start.index);
+      return anchorAt(start.index + offset, assoc);
+    };
     // This synchronous handler runs to completion against the authoritative
     // room before another HTTP decision can inspect its status.
     doc.transact(() => {
       if (decision === 'accepted') {
         text.delete(start.index, end.index - start.index);
         if (suggestion.replacement) text.insert(start.index, suggestion.replacement);
+      }
+      for (const annotation of annotations) {
+        const { map, key, value } = annotation;
+        if (annotation.proposal) {
+          if (decision === 'rejected' && annotation.image) { map.delete(key); continue; }
+          const { proposal, ...updated } = value;
+          if (decision === 'accepted') {
+            const from = clampOffset(proposal.from, 0);
+            const to = Math.max(from, clampOffset(proposal.to, replacementLength));
+            updated.anchor = { start: anchorAt(start.index + from, 0), end: anchorAt(start.index + to, -1) };
+          }
+          map.set(key, updated);
+        } else {
+          map.set(key, { ...value, anchor: {
+            start: translateEndpoint(annotation.from, value.anchor.start, 0),
+            end: translateEndpoint(annotation.to, value.anchor.end, -1),
+          } });
+        }
       }
       suggestions.set(req.params.suggestionId, { ...suggestion, status: decision, decidedBy: req.user.name });
     }, 'suggestion-decision');
@@ -438,7 +521,7 @@ export function createWorkspace(options = {}) {
   });
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   app.use((req, res, next) => {
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
     next();
   });
   app.use(express.static(path.join(sourceRoot, 'dist'), { index: false }));
@@ -551,6 +634,7 @@ export function createWorkspace(options = {}) {
     if (closed) return;
     closed = true;
     clearInterval(maintenance); clearInterval(autosnapshot);
+    for (const entry of documents.values()) clearTimeout(entry.reconcileTimer);
     for (const ws of wss.clients) ws.terminate();
     await new Promise(resolve => wss.close(resolve));
     await new Promise(resolve => server.close(resolve));

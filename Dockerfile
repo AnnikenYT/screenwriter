@@ -7,9 +7,11 @@ RUN npm run build
 
 FROM node:24-bookworm-slim AS production
 ARG VCS_REF=unknown
+ARG VERSION=1.1.0
 LABEL org.opencontainers.image.title="Screenwriter" \
       org.opencontainers.image.source="https://github.com/AnnikenYT/screenwriter" \
       org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data
 WORKDIR /app

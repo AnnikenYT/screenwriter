@@ -1,6 +1,7 @@
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
-import { characterName, locationName, parseFountain } from '../../shared/fountain.js'
+import { characterName, parseFountain } from '../../shared/fountain.js'
+import { reconcileSheets } from '../../shared/entities.js'
 
 export function connect(id, user) {
   const doc = new Y.Doc()
@@ -28,20 +29,7 @@ export function resolveAnchor(doc, anchor) {
 }
 
 export function discoverSheets(doc, blocks) {
-  doc.transact(() => {
-    for (const [kind, type, getName] of [['characters', 'character', characterName], ['locations', 'scene', locationName]]) {
-      const map = doc.getMap(kind)
-      const known = new Set([...map.values()].map(s => s.name.toUpperCase()))
-      for (const block of blocks) {
-        if (block.type !== type) continue
-        const name = getName(block.text)
-        if (!name || known.has(name.toUpperCase())) continue
-        const id = `${kind}-${encodeURIComponent(name.toUpperCase())}`
-        map.set(id, { id, name, age: '', tagline: '', appearance: '', notes: '', images: [] })
-        known.add(name.toUpperCase())
-      }
-    }
-  }, 'discovery')
+  reconcileSheets(doc, { prune: false, blocks })
 }
 
 // Independent field keys prevent editing one sheet field from overwriting a
