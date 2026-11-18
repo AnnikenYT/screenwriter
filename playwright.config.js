@@ -10,7 +10,7 @@ export default defineConfig({
   webServer: {
     command: 'node server/index.js',
     url: 'http://localhost:3100/api/health',
-    env: { PORT: '3100', PUBLIC_URL: 'http://localhost:3100', DATA_DIR: `/tmp/opencode/fountain-e2e-${process.pid}`, AUTH_MODE: 'none' },
+    env: { PORT: '3100', PUBLIC_URL: 'http://localhost:3100', DATA_DIR: `/tmp/screenwriter/e2e-${process.pid}`, AUTH_MODE: 'none' },
     reuseExistingServer: false,
     timeout: 30000,
   },

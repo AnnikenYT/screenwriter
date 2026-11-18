@@ -3,6 +3,7 @@ import { Decoration, ViewPlugin, WidgetType, keymap } from '@codemirror/view'
 import * as Y from 'yjs'
 import { applyReviewChanges, projectReview, sourceToView, viewToSource, annotationViewRange } from './review-model.js'
 import { relativeAnchor, resolveAnchor } from './collaboration.js'
+import { sendReviewChanges } from './review-api.js'
 
 const refreshReview = StateEffect.define()
 const remoteReview = Transaction.remote
@@ -36,11 +37,37 @@ class PeerCursor extends WidgetType {
   }
 }
 
-export function createScreenplayBinding({ text, awareness, getUser, onError, onChange, onHover, onImageHover, onCommentFocus }) {
+export function createScreenplayBinding({ text, awareness, getUser, onError, onUnsaved, onChange, onHover, onImageHover, onCommentFocus }) {
   const doc = text.doc
   const origin = {}
+  const reviewer = Boolean(doc.access && !doc.access.canEdit && doc.access.canReview)
+  let shadow = null, pendingReview = 0, reviewChain = Promise.resolve(), reviewFailed = false, shadowDirty = false
+  const reviewPast = [], reviewFuture = []
+  let reviewCapture = 0, historyTravel = false
+  const resetShadow = () => {
+    shadow?.destroy()
+    shadow = new Y.Doc()
+    Y.applyUpdate(shadow, Y.encodeStateAsUpdate(doc))
+  }
+  if (reviewer) { resetShadow(); doc.flushReview = () => reviewChain }
   const undoManager = new Y.UndoManager([text, doc.getMap('suggestions')], { trackedOrigins: new Set([origin]), captureTimeout: 650 })
   let model = projectReview(doc), view, queued = false, applying = false, destroyed = false, bookmark = null, suggesting = false
+  function navigateReview(from, to) {
+    if (!view || !from.length) return
+    const target = from.pop(), current = model.text
+    to.push(current)
+    let start = 0, oldEnd = current.length, newEnd = target.length
+    while (start < oldEnd && start < newEnd && current[start] === target[start]) start++
+    while (oldEnd > start && newEnd > start && current[oldEnd - 1] === target[newEnd - 1]) { oldEnd--; newEnd-- }
+    historyTravel = true
+    try { view.dispatch({ changes: { from: start, to: oldEnd, insert: target.slice(start, newEnd) }, selection: { anchor: newEnd }, userEvent: 'input' }) }
+    finally { historyTravel = false; reviewCapture = 0 }
+  }
+  const manager = reviewer ? {
+    undo: () => navigateReview(reviewPast, reviewFuture),
+    redo: () => navigateReview(reviewFuture, reviewPast),
+    stopCapturing: () => { reviewCapture = 0 },
+  } : undoManager
   const selectionBookmark = () => {
     if (!view) return null
     const range = view.state.selection.main
@@ -49,12 +76,13 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
       return {
         position: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, viewToSource(model, pos), 0)),
         ...(span ? { suggestionId: span.id, offset: pos - span.from } : {}),
+        ...(span ? { proposalBase: span.baseFrom, proposalAuthor: span.authorId } : {}),
       }
     }
     return { anchor: capture(range.anchor), head: capture(range.head) }
   }
   const restorePoint = point => {
-    const span = model.spans.find(s => s.id === point.suggestionId)
+    const span = model.spans.find(s => s.id === point.suggestionId) || (reviewer && model.spans.find(s => s.baseFrom === point.proposalBase && s.authorId === point.proposalAuthor))
     if (span) return span.from + Math.min(span.replacement.length, point.offset)
     try {
       const absolute = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(point.position), doc)
@@ -64,7 +92,11 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
   const refresh = () => {
     queued = false
     if (destroyed || !view) return
-    model = projectReview(doc)
+    if (pendingReview) return
+    if (reviewer && shadowDirty) { resetShadow(); shadowDirty = false }
+    const next = projectReview(doc)
+    if (reviewer && next.text !== model.text) { reviewPast.length = 0; reviewFuture.length = 0; reviewCapture = 0 }
+    model = next
     const oldText = view.state.doc.toString()
     let from = 0
     while (from < oldText.length && from < model.text.length && oldText[from] === model.text[from]) from++
@@ -85,7 +117,10 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
   }
   const schedule = () => { if (!queued && !destroyed) { queued = true; queueMicrotask(refresh) } }
   const beforeTransaction = () => { if (!applying) bookmark = selectionBookmark() }
-  const afterTransaction = () => { if (!applying) schedule() }
+  const afterTransaction = transaction => {
+    if (reviewer && transaction.changed.size) shadowDirty = true
+    if (!applying) schedule()
+  }
   const awarenessChanged = () => { if (view && !destroyed) schedule() }
   doc.on('beforeTransaction', beforeTransaction)
   doc.on('afterTransaction', afterTransaction)
@@ -160,13 +195,13 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
 
   return {
     get model() { return model },
-    get undoManager() { return undoManager },
+    get undoManager() { return manager },
     extensions: [
       decorations,
       keymap.of([
-        { key: 'Mod-z', run: () => { undoManager.undo(); return true } },
-        { key: 'Mod-Shift-z', run: () => { undoManager.redo(); return true } },
-        { key: 'Mod-y', run: () => { undoManager.redo(); return true } },
+        { key: 'Mod-z', run: () => { manager.undo(); return true } },
+        { key: 'Mod-Shift-z', run: () => { manager.redo(); return true } },
+        { key: 'Mod-y', run: () => { manager.redo(); return true } },
       ]),
     ],
     attach(editor) { view = editor; bookmark = selectionBookmark(); onChange?.(model) },
@@ -194,7 +229,27 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
           tr.changes.iterChanges((from, to, _a, _b, inserted) => changes.push({ from, to, replacement: inserted.toString() }))
           applying = true
           try {
-            model = applyReviewChanges(doc, model, changes, { user: getUser(), suggesting, origin })
+            const base = model.text
+            model = applyReviewChanges(reviewer ? shadow : doc, model, changes, { user: getUser(), suggesting: reviewer || suggesting, origin })
+            if (reviewer) {
+              if (!historyTravel) {
+                if (Date.now() - reviewCapture > 650) reviewPast.push(base)
+                reviewCapture = Date.now()
+                reviewFuture.length = 0
+                while (reviewPast.length > 1 && reviewPast.reduce((size, value) => size + value.length, 0) > 2 * 1024 * 1024) reviewPast.shift()
+              }
+              pendingReview++
+              reviewChain = reviewChain.then(async () => {
+                if (!reviewFailed && !destroyed) await sendReviewChanges(doc, base, changes)
+              }).catch(error => {
+                reviewFailed = true
+                onUnsaved?.(model.text)
+                onError?.(`Suggestion not saved: ${error.message}`)
+              }).finally(() => {
+                pendingReview--
+                if (!pendingReview && !destroyed) { reviewFailed = false; shadowDirty = true; schedule() }
+              })
+            }
           } catch (error) {
             // A rejected native input may already have touched contenteditable's
             // DOM. Reset it to the unchanged state rather than leaving a ghost
@@ -249,6 +304,8 @@ export function createScreenplayBinding({ text, awareness, getUser, onError, onC
       awareness.off('change', awarenessChanged)
       awareness.setLocalStateField('screenplaySelection', null)
       undoManager.destroy()
+      shadow?.destroy()
+      delete doc.flushReview
     },
   }
 }

@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { renderPDF } from './pdf.js';
 import { reconcileSheets } from '../shared/entities.js';
+import { createAccess, normalizeEmail } from './access.js';
+import { applyReviewChanges, projectReview } from '../shared/review-model.js';
+import nodemailer from 'nodemailer';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,6 +43,8 @@ export function createWorkspace(options = {}) {
   const maxImage = Number(env.MAX_IMAGE_BYTES || 10 * 1024 * 1024);
   const cacheLimit = Number(env.MAX_CACHED_DOCUMENTS || 100);
   const sessionAge = 7 * 86400_000;
+  if (Boolean(env.SMTP_URL) !== Boolean(env.SMTP_FROM)) throw new Error('Set both SMTP_URL and SMTP_FROM');
+  const mailer = options.mailer || (env.SMTP_URL ? nodemailer.createTransport({ url: env.SMTP_URL, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000 }) : null);
   mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'workspace.sqlite'));
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -54,6 +59,7 @@ export function createWorkspace(options = {}) {
   if (!db.prepare('PRAGMA table_info(documents)').all().some(column => column.name === 'archived_at')) {
     db.exec('ALTER TABLE documents ADD COLUMN archived_at INTEGER');
   }
+  const access = createAccess(db, { mode: authMode, publicURL, changed: invalidateAccess });
   const appendUpdate = db.prepare('INSERT INTO document_updates(document_id,state) VALUES(?,?)');
   const updateMetadata = db.prepare('UPDATE documents SET title=?,updated_at=? WHERE id=?');
   const selectUpdates = db.prepare('SELECT state FROM document_updates WHERE document_id=? ORDER BY sequence');
@@ -78,15 +84,14 @@ export function createWorkspace(options = {}) {
     const record = db.prepare('SELECT user FROM sessions WHERE id=? AND expires>?').get(sha(raw), Date.now());
     if (!record) return null;
     const user = JSON.parse(record.user);
+    if (authMode === 'oauth' && (!user.account || !db.prepare('SELECT 1 FROM accounts WHERE id=?').get(user.id))) return null;
+    if (authMode === 'none' && user.account) return null;
     if (authMode === 'none') user.nameSet ??= !/^Writer [0-9a-f]{4}$/i.test(user.name);
     return user;
   }
   function sessionKey(req) {
     const raw = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
     return raw && /^[A-Za-z0-9_-]{43}$/.test(raw) ? sha(raw) : null;
-  }
-  function activeSession(key) {
-    return key && Boolean(db.prepare('SELECT 1 FROM sessions WHERE id=? AND expires>?').get(key, Date.now()));
   }
   function setSession(res, user) {
     const raw = token();
@@ -106,7 +111,7 @@ export function createWorkspace(options = {}) {
     res.json({ ok: true });
   });
   app.use((req, res, next) => {
-    req.user = session(req);
+    req.user = session(req) || (authMode === 'oauth' ? access.guest(req) : null);
     req.sessionKey = sessionKey(req);
     const publicAsset = ['GET', 'HEAD'].includes(req.method) && /^\/(?:assets\/|icons\/|sw\.js$|offline\.html$|manifest\.webmanifest$)/.test(req.path);
     if (!req.user && authMode === 'none' && !publicAsset) {
@@ -148,7 +153,8 @@ export function createWorkspace(options = {}) {
     const oidc = await discovery();
     if (pendingLogins.size >= 1000) throw fail(429, 'Too many login attempts');
     const state = token(), verifier = token(), nonce = token();
-    pendingLogins.set(state, { verifier, nonce, expires: Date.now() + 600000 });
+    const returnTo = typeof req.query.returnTo === 'string' && /^\/\?document=[0-9a-f-]+$/.test(req.query.returnTo) ? req.query.returnTo : '/';
+    pendingLogins.set(state, { verifier, nonce, returnTo, expires: Date.now() + 600000 });
     res.cookie('screenplay_login', state, { httpOnly: true, secure: publicURL.protocol === 'https:', sameSite: 'lax', maxAge: 600000, path: '/auth' });
     const url = new URL(oidc.authorization_endpoint);
     const params = { client_id: env.OIDC_CLIENT_ID, redirect_uri: new URL('/auth/callback', publicURL).href, response_type: 'code', scope: 'openid profile email', state, nonce, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' };
@@ -184,8 +190,8 @@ export function createWorkspace(options = {}) {
       ((multipleAudiences || Object.hasOwn(payload, 'azp')) && payload.azp !== env.OIDC_CLIENT_ID)) throw fail(401, 'Invalid identity');
     const domains = (env.OIDC_ALLOWED_EMAIL_DOMAINS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
     if (domains.length && (payload.email_verified !== true || !domains.includes(String(payload.email || '').split('@')[1]?.toLowerCase()))) throw fail(403, 'Email domain is not allowed');
-    setSession(res, { id: sha(`${payload.iss}:${payload.sub}`), name: String(payload.name || payload.email || 'Writer').slice(0, 120), color: '#2563eb' });
-    res.redirect('/');
+    setSession(res, access.account(payload));
+    res.redirect(pending.returnTo || '/');
   });
   app.all('/auth/logout', (req, res) => {
     // GET logout is intentionally supported for ordinary navigation links.
@@ -197,14 +203,45 @@ export function createWorkspace(options = {}) {
       for (const ws of wss.clients) if (ws.sessionKey === key) ws.close(1008, 'Logged out');
     }
     res.clearCookie(cookieName, { path: '/' });
+    const guestUser = access.guest(req);
+    if (guestUser) {
+      db.prepare('DELETE FROM share_sessions WHERE visitor_id=?').run(guestUser.id);
+      for (const ws of wss.clients) if (ws.actorId === guestUser.id) ws.close(1008, 'Logged out');
+    }
+    res.clearCookie('screenplay_share', { path: '/' });
     res.redirect('/');
   });
+  app.post('/api/shares/open', async (req, res) => res.json(await access.openLink(req, res, req.body || {})));
   function requireUser(req, res, next) {
     if (!req.user) return next(fail(401, 'Authentication required'));
     next();
   }
   app.use(['/api', '/uploads'], requireUser, (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
   const documents = new Map();
+  function permissions(req, id, action) { return access.requirePermission(req, id, action); }
+  function socketAccess(ws) {
+    const user = authMode === 'none' ? session(ws.request) || { id: ws.actorId, name: 'Writer' }
+      : session(ws.request) || access.guest(ws.request);
+    if (!user || user.id !== ws.actorId) throw fail(401, 'Session expired');
+    ws.request.user = user;
+    const current = permissions(ws.request, ws.documentId);
+    if (current.role !== ws.accessRole) throw fail(403, 'Permissions changed');
+    return current;
+  }
+  function invalidateAccess(id) {
+    for (const ws of wss.clients) if (ws.documentId === id) {
+      try { socketAccess(ws); } catch { ws.close(4003, 'Access changed'); }
+    }
+  }
+  app.use('/api/documents/:id', (req, res, next) => {
+    try {
+      const scoped = /^\/(?:shares(?:\/|$)|leave$|owner$|review$|comments(?:\/|$))/.test(req.path) || req.path === '/suggestions';
+      const action = /^\/export\.(?:pdf|fountain)$/.test(req.path) ? 'export'
+        : ['GET', 'HEAD'].includes(req.method) || scoped ? 'view' : req.path === '/' && ['PATCH', 'DELETE'].includes(req.method) ? 'owner' : 'edit';
+      req.documentAccess = permissions(req, req.params.id, action);
+      next();
+    } catch (error) { next(error); }
+  });
   function scheduleReconciliation(entry) {
     clearTimeout(entry.reconcileTimer);
     entry.reconcileTimer = setTimeout(() => {
@@ -258,7 +295,13 @@ export function createWorkspace(options = {}) {
     doc.on('update', update => {
       if (entry.applying) { entry.broadcasts.push(update); return; }
       validateDocument(entry);
-      persistUpdate(id, entry, update);
+      if (entry.journalCount >= compactAfter || entry.historyBytes + update.length > maxHistory) {
+        const state = Y.encodeStateAsUpdate(entry.doc);
+        if (state.length > maxHistory) { discardRoom(id, entry); throw fail(413, 'Document history limit exceeded'); }
+        compact(id, entry, state);
+        updateMetadata.run(titleOf(entry.doc), Date.now(), id);
+        entry.dirty = true;
+      } else persistUpdate(id, entry, update);
       broadcastUpdate(entry, update);
     });
     doc.getText('screenplay').observe(() => scheduleReconciliation(entry));
@@ -339,6 +382,7 @@ export function createWorkspace(options = {}) {
   }
   function broadcast(entry, message) {
     for (const ws of entry.clients.keys()) {
+      try { socketAccess(ws); } catch (error) { ws.close(error.status === 401 ? 1008 : 4003, error.status === 401 ? 'Session expired' : 'Access changed'); continue; }
       if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < maxDocument * 2) ws.send(message);
       else if (ws.readyState === WebSocket.OPEN) ws.close(1013, 'Slow client');
     }
@@ -377,8 +421,8 @@ export function createWorkspace(options = {}) {
     entry.awareness.destroy();
     entry.doc.destroy();
   }
-  app.get('/api/documents', (req, res) => res.json(db.prepare(`SELECT id,title,updated_at AS updatedAt,archived_at AS archivedAt FROM documents WHERE archived_at IS ${req.query.archived === 'true' ? 'NOT NULL' : 'NULL'} ORDER BY updated_at DESC`).all()));
-  app.get('/api/documents/:id', (req, res) => res.json(documentRecord(req.params.id)));
+  app.get('/api/documents', (req, res) => res.json(access.list(req, req.query.archived === 'true')));
+  app.get('/api/documents/:id', (req, res) => res.json({ ...documentRecord(req.params.id), access: access.publicPermission(req.documentAccess) }));
   app.patch('/api/documents/:id', (req, res) => {
     const { id } = req.params;
     documentRecord(id);
@@ -405,6 +449,7 @@ export function createWorkspace(options = {}) {
     res.json({ ok: true });
   });
   app.post('/api/documents', (req, res) => {
+    if (authMode === 'oauth' && !req.user.account) throw fail(403, 'Sign in to create a document');
     const title = String(req.body?.title || 'Untitled screenplay').slice(0, 200);
     const text = req.body?.text ?? '';
     if (typeof text !== 'string' || Buffer.byteLength(text) > Math.min(maxUpdate, maxDocument)) throw fail(413, 'Document text too large');
@@ -412,9 +457,121 @@ export function createWorkspace(options = {}) {
     doc.getText('screenplay').insert(0, text);
     doc.getMap('meta').set('title', title);
     reconcileSheets(doc);
-    db.prepare('INSERT INTO documents(id,title,state,updated_at) VALUES(?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now());
+    db.prepare('INSERT INTO documents(id,title,state,updated_at,scope,owner_id) VALUES(?,?,?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now(), authMode === 'oauth' ? 'private' : 'shared', authMode === 'oauth' ? req.user.id : null);
     doc.destroy();
     res.status(201).json({ id, title });
+  });
+  app.get('/api/documents/:id/shares', (req, res) => res.json(access.shares(req, req.params.id)));
+  app.get('/api/documents/:id/sharing-info', (req, res) => res.json(access.sharingInfo(req, req.params.id)));
+  app.patch('/api/documents/:id/shares/:grantId', (req, res) => {
+    access.updateGrant(req, req.params.id, req.params.grantId, req.body || {});
+    res.json({ ok: true });
+  });
+  app.post('/api/documents/:id/shares', async (req, res) => {
+    const result = await access.createGrant(req, req.params.id, req.body || {});
+    if (result.email && mailer) {
+      try {
+        await mailer.sendMail({ from: env.SMTP_FROM, to: result.email, subject: 'Screenplay invitation',
+          text: `${req.user.name} shared a screenplay with you.\n${new URL('/?document=' + req.params.id, publicURL).href}` });
+        result.notificationSent = true;
+      } catch { result.notificationSent = false; }
+    }
+    res.status(201).json(result);
+  });
+  app.delete('/api/documents/:id/shares/:grantId', (req, res) => {
+    access.revoke(req, req.params.id, req.params.grantId);
+    res.json({ ok: true });
+  });
+  app.post('/api/documents/:id/leave', (req, res) => {
+    access.leave(req, req.params.id);
+    res.json({ ok: true });
+  });
+  app.post('/api/documents/:id/owner', (req, res) => {
+    permissions(req, req.params.id, 'owner');
+    const email = normalizeEmail(req.body?.email);
+    const target = db.prepare('SELECT id FROM accounts WHERE email=? AND email_verified=1').get(email);
+    if (!target) throw fail(400, 'The new owner must sign in with a verified email first');
+    db.prepare('UPDATE documents SET owner_id=?,owner_email=? WHERE id=?').run(target.id, email, req.params.id);
+    invalidateAccess(req.params.id);
+    res.json({ ok: true });
+  });
+  function reviewVector(vector) {
+    let state;
+    if (vector !== undefined) {
+      if (typeof vector !== 'string' || vector.length > 90000) throw fail(400, 'Invalid state vector');
+      try { state = new Uint8Array(Buffer.from(vector, 'base64')); Y.decodeStateVector(state); } catch { throw fail(400, 'Invalid state vector'); }
+    }
+    return state;
+  }
+  function reviewResponse(doc, vector) { return { update: Buffer.from(Y.encodeStateAsUpdate(doc, reviewVector(vector))).toString('base64') }; }
+  function validAnchor(doc, anchor) {
+    let a, b;
+    try {
+      a = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(anchor.start), doc);
+      b = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(anchor.end), doc);
+    } catch { /* Reject malformed or detached anchors. */ }
+    const text = doc.getText('screenplay');
+    if (!a || !b || a.type !== text || b.type !== text || a.index > b.index) throw fail(409, 'The selected passage changed');
+    return { from: a.index, to: b.index };
+  }
+  app.post('/api/documents/:id/review', (req, res) => {
+    permissions(req, req.params.id, 'review');
+    const { doc } = getDocument(req.params.id);
+    const model = projectReview(doc), changes = req.body?.changes;
+    reviewVector(req.body?.stateVector);
+    if (req.body?.base !== sha(model.text)) throw fail(409, 'The review changed. Retry your suggestion.');
+    if (!Array.isArray(changes) || !changes.length || changes.length > 100) throw fail(400, 'Invalid changes');
+    let end = -1, added = 0;
+    for (const change of changes) {
+      if (!Number.isInteger(change.from) || !Number.isInteger(change.to) || change.from < 0 || change.to < change.from ||
+        change.to > model.text.length || change.from < end || typeof change.replacement !== 'string') throw fail(400, 'Invalid changes');
+      end = change.to;
+      added += change.replacement.length;
+    }
+    if (added > maxUpdate || model.text.length + added > maxDocument) throw fail(413, 'Suggestion is too large');
+    try { applyReviewChanges(doc, model, changes, { user: req.user, suggesting: true, origin: 'review-command' }); }
+    catch (error) { throw fail(409, error.message); }
+    res.json(reviewResponse(doc, req.body?.stateVector));
+  });
+  app.post('/api/documents/:id/suggestions', (req, res) => {
+    permissions(req, req.params.id, 'review');
+    const { doc } = getDocument(req.params.id), body = req.body || {};
+    const range = validAnchor(doc, body.anchor);
+    const original = doc.getText('screenplay').toString().slice(range.from, range.to);
+    if (original !== body.original) throw fail(409, 'The selected passage changed');
+    if (typeof body.replacement !== 'string' || body.replacement.length > maxUpdate) throw fail(400, 'Invalid suggestion');
+    const id = randomUUID();
+    doc.getMap('suggestions').set(id, { id, anchor: body.anchor, original, replacement: body.replacement, author: req.user.name, authorId: req.user.id, createdAt: Date.now(), status: 'pending' });
+    res.json(reviewResponse(doc));
+  });
+  app.post('/api/documents/:id/comments', (req, res) => {
+    permissions(req, req.params.id, 'review');
+    const { doc } = getDocument(req.params.id), body = req.body || {};
+    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 20000) throw fail(400, 'Invalid comment');
+    const parent = body.parentId ? doc.getMap('comments').get(body.parentId) : null;
+    if (body.parentId && (!parent || parent.parentId)) throw fail(404, 'Comment not found');
+    const anchor = parent?.anchor || body.anchor;
+    const range = validAnchor(doc, anchor);
+    let quote = doc.getText('screenplay').toString().slice(range.from, range.to), proposal = parent?.proposal || body.proposal;
+    if (proposal) {
+      const suggestion = doc.getMap('suggestions').get(proposal.id);
+      if (!suggestion || suggestion.status !== 'pending' || !Number.isInteger(proposal.from) || !Number.isInteger(proposal.to) ||
+        proposal.from < 0 || proposal.to < proposal.from || proposal.to > suggestion.replacement.length) throw fail(409, 'Suggestion changed');
+      proposal = { id: proposal.id, from: proposal.from, to: proposal.to };
+      quote = suggestion.replacement.slice(proposal.from, proposal.to);
+    }
+    const id = randomUUID();
+    doc.getMap('comments').set(id, { id, parentId: parent?.id || null, text: body.text.trim(), quote, anchor, ...(proposal ? { proposal } : {}), author: req.user.name, authorId: req.user.id, createdAt: Date.now(), resolved: false });
+    res.json({ ...reviewResponse(doc), id });
+  });
+  app.patch('/api/documents/:id/comments/:commentId', (req, res) => {
+    const permission = permissions(req, req.params.id, 'review');
+    const { doc } = getDocument(req.params.id), comment = doc.getMap('comments').get(req.params.commentId);
+    if (!comment) throw fail(404, 'Comment not found');
+    if (!permission.canEdit && comment.authorId !== req.user.id) throw fail(403, 'Not permitted');
+    if (typeof req.body?.resolved !== 'boolean') throw fail(400, 'Invalid comment');
+    doc.getMap('comments').set(comment.id, { ...comment, resolved: req.body.resolved });
+    res.json(reviewResponse(doc));
   });
   app.get('/api/documents/:id/versions', (req, res) => {
     getDocument(req.params.id);
@@ -548,6 +705,7 @@ export function createWorkspace(options = {}) {
     return null;
   }
   app.post('/api/documents/:id/images', (req, res, next) => { getDocument(req.params.id); next(); }, upload.single('image'), (req, res) => {
+    permissions(req, req.params.id, 'edit');
     const type = req.file && imageType(req.file.buffer);
     if (!type) throw fail(415, 'Only PNG, JPEG, GIF and WebP images are accepted');
     const id = randomUUID(), filename = `${id}.${type[0]}`;
@@ -559,8 +717,9 @@ export function createWorkspace(options = {}) {
   });
   app.get('/uploads/:filename', (req, res) => {
     if (!/^[0-9a-f-]{36}\.(?:png|jpg|gif|webp)$/.test(req.params.filename)) throw fail(404, 'Image not found');
-    const row = db.prepare('SELECT mime FROM images WHERE filename=?').get(req.params.filename);
+    const row = db.prepare('SELECT mime,document_id FROM images WHERE filename=?').get(req.params.filename);
     if (!row) throw fail(404, 'Image not found');
+    permissions(req, row.document_id);
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.type(row.mime).sendFile(req.params.filename, { root: path.join(dataDir, 'uploads') });
   });
@@ -569,6 +728,11 @@ export function createWorkspace(options = {}) {
     res.type('application/pdf');
     res.setHeader('Content-Disposition', "attachment; filename=\"screenplay.pdf\"");
     renderPDF(doc.getText('screenplay').toString(), titleOf(doc), res);
+  });
+  app.get('/api/documents/:id/export.fountain', (req, res) => {
+    const { doc } = getDocument(req.params.id);
+    res.type('text/plain').setHeader('Content-Disposition', 'attachment; filename="screenplay.fountain"');
+    res.send(doc.getText('screenplay').toString());
   });
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   app.use((req, res, next) => {
@@ -606,10 +770,13 @@ export function createWorkspace(options = {}) {
     const reject = status => { socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`); };
     try {
       if (!allowedOrigin(req)) return reject('403 Forbidden');
-      if (authMode === 'oauth' && !session(req)) return reject('401 Unauthorized');
+      req.user = session(req) || (authMode === 'oauth' ? access.guest(req) : null);
+      if (authMode === 'oauth' && !req.user) return reject('401 Unauthorized');
+      if (authMode === 'none') req.user ||= { id: 'anonymous', name: 'Writer' };
       const pathname = new URL(req.url, publicURL).pathname;
       const match = /^\/collaboration\/([0-9a-f-]+)$/.exec(pathname);
       if (!match) return reject('404 Not Found');
+      req.documentAccess = permissions(req, match[1]);
       const entry = getDocument(match[1]);
       if (wss.clients.size >= Number(env.MAX_WEBSOCKETS || 1000)) return reject('503 Service Unavailable');
       wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req, entry));
@@ -617,6 +784,10 @@ export function createWorkspace(options = {}) {
   });
   wss.on('connection', (ws, req, entry) => {
     ws.sessionKey = sessionKey(req);
+    ws.request = req;
+    ws.actorId = req.user.id;
+    ws.documentId = entry.id;
+    ws.accessRole = req.documentAccess.role;
     entry.clients.set(ws, new Set());
     ws.alive = true;
     ws.on('pong', () => { ws.alive = true; });
@@ -639,7 +810,7 @@ export function createWorkspace(options = {}) {
         if (Date.now() - windowStart > 10000) { windowStart = Date.now(); bytes = 0; }
         bytes += data.length;
         if (bytes > maxDocument * 2) throw new Error('Rate limit exceeded');
-        if (authMode === 'oauth' && !session(req)) { ws.close(1008, 'Session expired'); return; }
+        const currentAccess = socketAccess(ws);
         const decoder = decoding.createDecoder(new Uint8Array(data));
         const type = decoding.readVarUint(decoder);
         const reply = encoding.createEncoder();
@@ -649,6 +820,10 @@ export function createWorkspace(options = {}) {
           if (subtype === 0) sync.readSyncStep1(decoder, reply, entry.doc);
           else if (subtype === 1 || subtype === 2) {
             const update = decoding.readVarUint8Array(decoder);
+            if (!currentAccess.canEdit) {
+              const decoded = Y.decodeUpdate(update);
+              if (decoded.structs.length || decoded.ds.clients.size) { ws.close(4003, 'Editing not permitted'); return; }
+            }
             applyIncoming(entry.id, entry, update, ws);
           } else throw new Error('Unknown sync message');
           if (encoding.length(reply) > 1) ws.send(encoding.toUint8Array(reply));
@@ -670,7 +845,9 @@ export function createWorkspace(options = {}) {
           encoding.writeVarUint8Array(reply, awarenessProtocol.encodeAwarenessUpdate(entry.awareness, [...entry.awareness.getStates().keys()]));
           ws.send(encoding.toUint8Array(reply));
         } else throw new Error('Unknown message');
-      } catch { ws.close(1008, 'Invalid or oversized collaboration message'); }
+      } catch (error) {
+        ws.close([403, 404].includes(error.status) ? 4003 : 1008, [403, 404].includes(error.status) ? 'Access changed' : 'Invalid or oversized collaboration message');
+      }
     });
     ws.on('error', () => {});
     ws.on('close', () => {
@@ -681,12 +858,13 @@ export function createWorkspace(options = {}) {
   });
   const maintenance = setInterval(() => {
     for (const ws of wss.clients) {
-      if (authMode === 'oauth' && !activeSession(ws.sessionKey)) ws.close(1008, 'Session expired');
-      else if (!ws.alive) ws.terminate();
+      try { socketAccess(ws); } catch (error) { ws.close(error.status === 401 ? 1008 : 4003, error.status === 401 ? 'Session expired' : 'Access changed'); continue; }
+      if (!ws.alive) ws.terminate();
       else { ws.alive = false; ws.ping(); }
     }
     for (const [state, login] of pendingLogins) if (login.expires < Date.now()) pendingLogins.delete(state);
     db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());
+    access.cleanup();
   }, Number(env.HEARTBEAT_INTERVAL_MS || 30000));
   maintenance.unref();
   const autosnapshot = setInterval(() => {
@@ -705,6 +883,7 @@ export function createWorkspace(options = {}) {
     await new Promise(resolve => server.close(resolve));
     for (const entry of documents.values()) { entry.awareness.destroy(); entry.doc.destroy(); }
     db.close();
+    mailer?.close?.();
   }
   return { app, server, close };
 }

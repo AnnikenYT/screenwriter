@@ -60,7 +60,7 @@ test('a connection closing during a barrier prevents the reload', async () => {
   await assert.rejects(promise, /not reloaded/)
 })
 test('real socket barrier commits text, deletions, and proposals before restart', async () => {
-  const directory = await mkdtemp('/tmp/opencode/screenwriter-barrier-')
+  const directory = await mkdtemp('/tmp/screenwriter/screenwriter-barrier-')
   let workspace, provider, doc
   async function start() {
     workspace = createWorkspace({ DATA_DIR: directory, AUTH_MODE: 'none' })

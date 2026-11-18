@@ -20,12 +20,14 @@ const props = defineProps({
   mode: { type: String, default: 'live' },
   markdown: Boolean,
   review: Boolean,
+  readOnly: Boolean,
 })
 const emit = defineEmits(['selection', 'cursor', 'geometry', 'display', 'error', 'decide', 'link-image', 'open-comment', 'scroll'])
 const host = ref(null)
 const hovered = ref(null)
 const hoveredImage = ref(null)
 const hoverStyle = ref({})
+const unsavedReview = ref(null)
 let view, undo, binding, resizeObserver, hoverTimer
 const presentation = new Compartment()
 
@@ -103,11 +105,13 @@ onMounted(() => {
     binding = createScreenplayBinding({
       text: props.ytext, awareness: props.awareness, getUser: () => props.user,
       onError: message => emit('error', message),
+      onUnsaved: text => { unsavedReview.value = text },
       onHover: showHover,
       onImageHover: showImage,
       onCommentFocus: id => emit('open-comment', id),
       onChange(model) {
         emit('display', model.text)
+        if (view) emit('selection', getSelection())
         if (hovered.value && !model.spans.some(s => s.id === hovered.value.id)) hovered.value = null
         measure()
       },
@@ -122,7 +126,8 @@ onMounted(() => {
       extensions: [
         ...(binding ? binding.extensions : [yCollab(props.ytext, props.awareness, { undoManager: undo })]),
         ...(!props.markdown ? screenplayTools(props.ytext.doc, () => emit('link-image')) : []),
-        presentation.of(extensions()),
+         presentation.of(extensions()),
+         EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
         EditorView.lineWrapping, drawSelection(), highlightSelectionMatches(),
         placeholder(props.markdown ? 'Notes, ideas, loose ends…' : 'INT. SOMEWHERE - DAY\n\nStart writing.'),
         keymap.of([...defaultKeymap, ...searchKeymap, indentWithTab, {
@@ -192,17 +197,18 @@ defineExpose({
 <template>
   <div ref="host" :class="['text-editor', { 'live-editor': mode === 'live' && !markdown, 'raw-editor': mode === 'split', 'markdown-editor': markdown }]" />
   <Teleport to="body">
+    <div v-if="unsavedReview !== null" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-label="Unsaved suggestion"><header><h2>Suggestion not saved</h2><button class="icon-button" aria-label="Close unsaved suggestion" @click="unsavedReview = null"><X :size="18" /></button></header><p>Copy your proposed text before closing.</p><textarea :value="unsavedReview" readonly rows="10" aria-label="Unsaved proposed text" @focus="$event.target.select()" /></section></div>
     <section v-if="hovered" class="inline-suggestion-popover" :style="hoverStyle" role="dialog" :aria-label="`Suggestion by ${hovered.author}`" @mouseenter="keepHover" @mouseleave="hideHover" @keydown.esc="hovered = null">
       <button class="icon-button compact touch-popover-close" aria-label="Close suggestion" @click="hovered = null"><X :size="18" /></button>
       <div class="review-byline"><strong>{{ hovered.author }}</strong><span class="small muted">Suggested edit</span></div>
       <p class="small muted">{{ new Date(hovered.createdAt).toLocaleString() }}</p>
-      <div class="button-row"><button class="text-button accept" @click="decide('accepted')"><Check :size="14" />Accept suggestion</button><button class="text-button" @click="decide('rejected')"><X :size="14" />Reject suggestion</button></div>
+      <div v-if="ytext.doc.access?.canEdit !== false" class="button-row"><button class="text-button accept" @click="decide('accepted')"><Check :size="14" />Accept suggestion</button><button class="text-button" @click="decide('rejected')"><X :size="14" />Reject suggestion</button></div>
     </section>
     <section v-if="hoveredImage" class="linked-image-popover" :style="hoverStyle" role="dialog" aria-label="Linked image" @mouseenter="keepHover" @mouseleave="hideHover" @keydown.esc="hoveredImage = null">
       <button class="icon-button compact touch-popover-close" aria-label="Close image preview" @click="hoveredImage = null"><X :size="18" /></button>
       <img :src="hoveredImage.url" :alt="hoveredImage.caption || 'Passage image reference'" referrerpolicy="no-referrer" />
       <p v-if="hoveredImage.caption">{{ hoveredImage.caption }}</p>
-      <div class="review-byline"><span class="small muted">{{ hoveredImage.author }}</span><button class="text-button" @click="unlinkImage">Unlink image</button></div>
+      <div class="review-byline"><span class="small muted">{{ hoveredImage.author }}</span><button v-if="ytext.doc.access?.canEdit !== false" class="text-button" @click="unlinkImage">Unlink image</button></div>
     </section>
   </Teleport>
 </template>

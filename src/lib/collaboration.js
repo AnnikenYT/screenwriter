@@ -3,33 +3,22 @@ import { WebsocketProvider } from 'y-websocket'
 import { characterName, parseFountain } from '../../shared/fountain.js'
 import { reconcileSheets } from '../../shared/entities.js'
 
-export function connect(id, user) {
+export function connect(id, user, access = { canEdit: true }) {
   const doc = new Y.Doc()
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   // Keep the server authoritative for both data and awareness round trips.
   // Cross-tab BroadcastChannel relays could otherwise acknowledge another
   // tab's presence marker before this socket's edits have reached the server.
-  const provider = new WebsocketProvider(`${protocol}//${location.host}/collaboration`, id, doc, { disableBc: true })
+  const provider = new WebsocketProvider(`${protocol}//${location.host}/collaboration`, id, doc, { disableBc: true, connect: false })
+  if (!access.canEdit) doc.off('update', provider._updateHandler)
+  doc.access = access
+  doc.documentId = id
+  provider.connect()
   provider.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: `${user.color}25` })
   return { doc, provider, text: doc.getText('screenplay'), scratchpad: doc.getText('scratchpad') }
 }
 
-export function relativeAnchor(doc, from, to) {
-  const text = doc.getText('screenplay')
-  return {
-    start: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, from, 0)),
-    end: Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(text, to, -1)),
-  }
-}
-
-export function resolveAnchor(doc, anchor) {
-  try {
-    const a = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(anchor.start), doc)
-    const b = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(anchor.end), doc)
-    if (!a || !b || a.type !== doc.getText('screenplay') || b.type !== a.type) return null
-    return { from: a.index, to: Math.max(a.index, b.index) }
-  } catch { return null }
-}
+export { relativeAnchor, resolveAnchor } from '../../shared/anchors.js'
 
 export function discoverSheets(doc, blocks) {
   reconcileSheets(doc, { prune: false, blocks })

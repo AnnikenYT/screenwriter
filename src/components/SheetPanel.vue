@@ -63,14 +63,14 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
     </template>
     <template v-else>
       <button class="text-button back-link" @click="selectedId = null"><ArrowLeft :size="14" /> All {{ kind }}</button>
-      <div class="lifecycle-actions">
+      <div v-if="doc.access?.canEdit !== false" class="lifecycle-actions">
         <button v-if="selected.status === 'archived'" class="text-button" @click="lifecycle('active')">Restore sheet</button>
         <button v-else class="text-button" @click="lifecycle('archived')">Archive sheet</button>
         <button class="text-button danger-button" @click="lifecycle('deleted')">Delete sheet</button>
       </div>
       <p v-if="selected.status === 'archived'" class="field-hint">Archived — notes and images are kept. Restore to edit.</p>
-      <fieldset :disabled="selected.status === 'archived'" class="sheet-fields">
-      <label class="field-label">Name<input :value="selected.name" class="sheet-name" @change="rename" /></label>
+      <fieldset :disabled="selected.status === 'archived' || doc.access?.canEdit === false" class="sheet-fields">
+      <label class="field-label">Name<input :value="selected.name" class="sheet-name" :disabled="doc.access?.canEdit === false || selected.status === 'archived'" @change="rename" /></label>
       <p class="field-hint">Renaming updates references throughout the screenplay and notes.</p>
       <label v-if="kind === 'characters'" class="field-label">Age<input :value="selected.age" placeholder="e.g. Early 30s" @input="update('age', $event.target.value)" /></label>
       <label class="field-label">Tagline<input :value="selected.tagline" placeholder="In a few words…" @input="update('tagline', $event.target.value)" /></label>

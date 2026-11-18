@@ -56,7 +56,7 @@ test('two independent browsers collaborate, review, take notes and export', asyn
   await page.getByLabel('Comment on selection').fill('Keep this quiet and restrained.')
   await page.getByRole('button', { name: 'Post comment', exact: true }).click()
   await expect(other.getByText('Keep this quiet and restrained.')).toBeVisible()
-  await other.screenshot({ path: '/tmp/opencode/screenwriter-line-comments.png', animations: 'disabled' })
+  await other.screenshot({ path: '/tmp/screenwriter/screenwriter-line-comments.png', animations: 'disabled' })
   await other.getByLabel('Reply to comment').fill('Agreed.')
   await other.getByRole('button', { name: 'Send reply' }).click()
   await expect(page.getByText('Agreed.', { exact: true })).toBeVisible()
@@ -149,7 +149,7 @@ test('live formatting reveals source at the cursor and retains dialogue until tw
   await expect(page.locator('.cm-line.ft-dialogue').first()).toHaveClass(/ft-active/)
   await page.keyboard.press('ArrowDown')
   await expect(page.locator('.cm-line.ft-dialogue').first()).toHaveClass(/ft-rendered/)
-  await page.screenshot({ path: '/tmp/opencode/screenplay-desktop.png', fullPage: true })
+  await page.screenshot({ path: '/tmp/screenwriter/screenplay-desktop.png', fullPage: true })
 })
 
 test('mobile editor and sidebar fit without horizontal page overflow', async ({ page, request }) => {
@@ -160,7 +160,7 @@ test('mobile editor and sidebar fit without horizontal page overflow', async ({ 
   await page.getByRole('button', { name: 'Open tools', exact: true }).click()
   await page.getByRole('button', { name: 'Characters', exact: true }).click()
   await expect(page.getByRole('button', { name: 'MARA Character sheet' })).toBeVisible()
-  await page.screenshot({ path: '/tmp/opencode/screenplay-mobile.png', fullPage: true })
+  await page.screenshot({ path: '/tmp/screenwriter/screenplay-mobile.png', fullPage: true })
 })
 
 test('feature-length source stays virtualized and responsive', async ({ page, request }) => {
@@ -200,7 +200,7 @@ test('visible live selections, named guests, inline replacement and stale-safe r
   await page.keyboard.press('Control+Shift+ArrowRight')
   await expect(page.locator('.cm-selectionBackground').first()).toBeVisible()
   expect(await page.locator('.cm-selectionLayer').evaluate(el => Number(getComputedStyle(el).zIndex))).toBeGreaterThan(0)
-  await page.screenshot({ path: '/tmp/opencode/screenwriter-selection.png' })
+  await page.screenshot({ path: '/tmp/screenwriter/screenwriter-selection.png' })
   await page.getByRole('button', { name: 'Editing', exact: true }).click()
   await screenplay(page).focus()
   await page.keyboard.type('dog', { delay: 25 })
@@ -211,7 +211,7 @@ test('visible live selections, named guests, inline replacement and stale-safe r
   await expect(other.locator('.inline-suggestion-original')).toContainText('cat')
   await other.locator('.inline-suggestion-replacement').hover()
   await expect(other.getByRole('dialog', { name: 'Suggestion by Alice' })).toBeVisible()
-  await other.screenshot({ path: '/tmp/opencode/screenwriter-inline-suggestion.png', animations: 'disabled' })
+  await other.screenshot({ path: '/tmp/screenwriter/screenwriter-inline-suggestion.png', animations: 'disabled' })
   await other.getByRole('button', { name: 'Reject suggestion' }).click()
   await expect(page.locator('.inline-suggestion-replacement')).toHaveCount(0)
   await expect(screenplay(page)).toContainText('The cat waits.')
@@ -252,7 +252,7 @@ test('Tab completes names, formatting wraps selections, images hover, and dark m
   await expect(page.getByRole('img', { name: 'The room in winter' })).toBeVisible()
   await page.getByRole('button', { name: 'Switch to dark mode' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await page.screenshot({ path: '/tmp/opencode/screenwriter-dark.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/screenwriter/screenwriter-dark.png', animations: 'disabled' })
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   expect(errors).toEqual([])
@@ -272,7 +272,7 @@ test('dual dialogue renders side by side in live mode and reveals source on clic
   await expect(screenplay(page)).toContainText('ELI ^')
   await page.keyboard.press('Control+End')
   await expect(page.locator('.live-dual-dialogue')).toBeVisible()
-  await page.screenshot({ path: '/tmp/opencode/screenwriter-dual.png' })
+  await page.screenshot({ path: '/tmp/screenwriter/screenwriter-dual.png' })
   expect(errors).toEqual([])
 })
 

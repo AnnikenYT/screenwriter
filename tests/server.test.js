@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
@@ -14,6 +13,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { performance } from 'node:perf_hooks';
 import { writeScreenplay } from '../server/pdf.js';
 import { existsSync } from 'node:fs';
+
+await mkdir('/tmp/screenwriter', { recursive: true });
 
 const waitFor = async predicate => {
   for (let i = 0; i < 500; i++) {
@@ -47,7 +48,7 @@ function resolve(doc, anchor) {
 }
 
 test('guest display names persist without changing the session, identity, expiry or other users', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-names-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-names-');
   let server = await start(dir);
   let database;
   try {
@@ -120,7 +121,7 @@ test('PDF keeps character cues and nested production emphasis bold', () => {
 });
 
 test('server reconciles current screenplay sheets and journals cleanup across restart', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-sheets-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-sheets-');
   let server = await start(dir);
   const peers = [];
   const source = 'INT. ROOM - DAY\n\nALICE\nHello.\n\nBOB\nGoodbye.\n\nEXT. GARDEN - NIGHT\n\nQuiet.';
@@ -198,7 +199,7 @@ test('server reconciles current screenplay sheets and journals cleanup across re
 });
 
 test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable restart', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-test-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-test-');
   const dataDir = path.join(dir, '.private', 'data');
   let server = await start(dataDir);
   const peers = [];
@@ -329,7 +330,7 @@ test('HTTP API, Yjs collaboration, restore, image uploads, PDF and durable resta
 });
 
 test('OAuth denies protected HTTP routes, uploads and websocket upgrades', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-auth-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-auth-');
   const server = await start(dir, { AUTH_MODE: 'oauth' });
   try {
     const session = await (await fetch(`${server.base}/api/session`)).json();
@@ -352,7 +353,7 @@ test('OAuth denies protected HTTP routes, uploads and websocket upgrades', async
 });
 
 test('OIDC authorization code, PKCE, signed identity, domain restriction and logout', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-oidc-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-oidc-');
   const keys = await generateKeyPair('RS256');
   const jwk = { ...await exportJWK(keys.publicKey), kid: 'test', use: 'sig', alg: 'RS256' };
   let nonce, challenge, issuer, idTokenOverrides = {};
@@ -448,7 +449,7 @@ test('OIDC authorization code, PKCE, signed identity, domain restriction and log
 });
 
 test('large-script edits append small durable deltas, replay on restart, and compact on snapshot', async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-performance-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-performance-');
   let server = await start(dir, { COMPACT_AFTER_UPDATES: 10000 });
   let database;
   const peers = [];
@@ -494,7 +495,7 @@ test('large-script edits append small durable deltas, replay on restart, and com
 });
 
 test('semantic source-limit violations reset to durable state without broadcasting bad source', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-limits-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-limits-');
   const server = await start(dir, { MAX_DOCUMENT_BYTES: 128, MAX_HISTORY_BYTES: 8192 });
   const peers = [];
   try {
@@ -519,7 +520,7 @@ test('semantic source-limit violations reset to durable state without broadcasti
 });
 
 test('concurrent suggestion decisions apply replacement once and reject stale sources', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-decisions-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-decisions-');
   const server = await start(dir);
   const peers = [];
   try {
@@ -566,7 +567,7 @@ test('concurrent suggestion decisions apply replacement once and reject stale so
 });
 
 test('suggestion decisions preserve proposal and existing annotation ranges without touching other suggestions', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'screenplay-annotation-decisions-'));
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-annotation-decisions-');
   const server = await start(dir);
   const peers = [];
   try {

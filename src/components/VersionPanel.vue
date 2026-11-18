@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { History, RotateCcw, X } from 'lucide-vue-next'
 import { api } from '../lib/api.js'
-const props = defineProps({ documentId: String })
+const props = defineProps({ documentId: String, canEdit: { type: Boolean, default: true } })
 const emit = defineEmits(['error'])
 const versions = ref([])
 const label = ref('')
@@ -35,7 +35,7 @@ onMounted(load)
 <template>
   <div class="panel-body version-panel">
     <p class="panel-intro">Live edits are saved continuously. Keep a named checkpoint before trying something new.</p>
-    <form @submit.prevent="save" class="version-form"><input v-model="label" placeholder="Version name (optional)" aria-label="Version name" /><button class="primary-button" :disabled="busy">Save version</button></form>
+    <form v-if="canEdit" @submit.prevent="save" class="version-form"><input v-model="label" placeholder="Version name (optional)" aria-label="Version name" /><button class="primary-button" :disabled="busy">Save version</button></form>
     <button v-for="version in versions" :key="version.id" class="version-item" @click="inspect(version)"><History :size="16" /><span><strong>{{ version.label || 'Untitled version' }}</strong><small>{{ new Date(version.createdAt).toLocaleString() }}</small></span></button>
     <div v-if="!versions.length" class="empty-state">Your checkpoints will appear here.</div>
     <Teleport to="body">
@@ -43,7 +43,7 @@ onMounted(load)
         <section class="modal version-modal" role="dialog" aria-modal="true" aria-labelledby="version-title" @keydown.esc="preview = null">
           <header><div><h2 id="version-title">{{ preview.label || 'Version preview' }}</h2><p class="muted small">{{ new Date(preview.createdAt).toLocaleString() }}</p></div><button class="icon-button" aria-label="Close version preview" @click="preview = null"><X :size="18" /></button></header>
           <pre class="version-source">{{ preview.text }}</pre>
-          <footer><p class="small muted">{{ confirmRestore ? 'Restore screenplay, sheets, scratchpad, and review data for everyone? A backup is saved first.' : 'Restoring changes the shared document for all collaborators.' }}</p><button class="primary-button" :disabled="busy" @click="confirmRestore ? restore() : confirmRestore = true"><RotateCcw :size="14" />{{ confirmRestore ? 'Confirm restore' : 'Restore this version' }}</button></footer>
+          <footer v-if="canEdit"><p class="small muted">{{ confirmRestore ? 'Restore screenplay, sheets, scratchpad, and review data for everyone? A backup is saved first.' : 'Restoring changes the shared document for all collaborators.' }}</p><button class="primary-button" :disabled="busy" @click="confirmRestore ? restore() : confirmRestore = true"><RotateCcw :size="14" />{{ confirmRestore ? 'Confirm restore' : 'Restore this version' }}</button></footer>
         </section>
       </div>
     </Teleport>

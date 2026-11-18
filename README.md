@@ -43,13 +43,26 @@ For all other configuration options, see [`.env.example`](.env.example).
 
 ## Authentication
 
-- **`AUTH_MODE=none`** (default): everyone who can reach the server can access **all documents**.
+- **`AUTH_MODE=none`** (default): everyone who can reach the server can access the **shared workspace**.
   - Click your avatar to choose a writer name.
 - **`AUTH_MODE=oauth`**: sign in through an OpenID Connect provider.
   - Set `PUBLIC_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET`.
   - Register callback: `${PUBLIC_URL}/auth/callback`.
   - Optional restriction: `OIDC_ALLOWED_EMAIL_DOMAINS=example.com`.
-- All users share one workspace; no per-document permissions or enforced reviewer roles.
+  - **Using OAUTH enables Personal Workspaces**:
+    - Each user has a private workspace, and can share documents with others.
+    - Sharing can be done by email or by generating a shareable link.
+    - Account-free links can be reopened in a fresh browser session by anyone holding the link.
+
+### Existing documents
+
+- Back up the data first. Old OAuth sessions must sign in again.
+- Legacy documents stay hidden in OAuth mode until assigned an owner.
+- List IDs: `AUTH_MODE=oauth DATA_DIR=/data node server/ownership.js --list`.
+- Map IDs to emails in `owners.json`: `{"document-id":"owner@example.com"}`.
+- Preview: `AUTH_MODE=oauth DATA_DIR=/data node server/ownership.js owners.json`.
+- Apply the same command with `--apply`. Owners must sign in with verified emails.
+- Changing auth mode does not make private documents public.
 
 ## Deployment notes
 
@@ -64,13 +77,15 @@ PUBLIC_URL=http://localhost:5173 npm run dev
 ```
 
 - Requires Node **24+**; open **http://localhost:5173**.
+- Local OAuth: `npm run dev:oauth`, then open **http://127.0.0.1:5173**. Pick Alice, Bob, or a custom email. Use separate browser profiles to test sharing.
+- OAuth test data stays in `data/dev-oauth`. Optional overrides: `DEV_OAUTH_DATA_DIR`, `DEV_OAUTH_UI_PORT`, `DEV_OAUTH_API_PORT`, `DEV_OAUTH_ISSUER_PORT`.
 - Tests: `npx playwright install chromium`, then `npm run verify`.
 
 ## To-Do
 
 - [ ] [Offline support](https://github.com/AnnikenYT/screenwriter/issues/1)
 - [ ] [Themes](https://github.com/AnnikenYT/screenwriter/issues/2)
-- [ ] [Better Access Control/Per-User Workspace](https://github.com/AnnikenYT/screenwriter/issues/3)
+- [x] [Better Access Control/Per-User Workspace](https://github.com/AnnikenYT/screenwriter/issues/3)
 
 ## License
 
