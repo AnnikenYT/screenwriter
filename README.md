@@ -66,6 +66,8 @@ For all other configuration options, see [`.env.example`](.env.example).
 
 ## Deployment notes
 
+- You can use the `dev`, `main`, or `<branch-name>` as a tag to get faster updates, while `latest` is always the newest stable release. You can also use `:0.0.0` or `:v0.0.0` to pin a version.
+
 - PDF: Courier is not full-Unicode; no automatic continuation cues; long title metadata is clipped.
 - Health check: `/api/health`. Limits and other settings: [`.env.example`](.env.example).
 
@@ -86,6 +88,7 @@ PUBLIC_URL=http://localhost:5173 npm run dev
 - [ ] [Offline support](https://github.com/AnnikenYT/screenwriter/issues/1)
 - [ ] [Themes](https://github.com/AnnikenYT/screenwriter/issues/2)
 - [x] [Better Access Control/Per-User Workspace](https://github.com/AnnikenYT/screenwriter/issues/3)
+ (implemented in dev).
 
 ## License
 
