@@ -95,6 +95,7 @@ test('sharing layout edits permissions, creates links, and works on a dark phone
   await dialog.getByLabel('Password (optional)').fill('layout-password')
   await dialog.getByRole('button', { name: 'Create link', exact: true }).click()
   await expect(dialog.getByLabel('Link', { exact: true })).toHaveValue(/\/share#/)
+  const savedLink = await dialog.getByLabel('Link', { exact: true }).inputValue()
   await page.setViewportSize({ width: 390, height: 844 })
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark')
   await dialog.getByRole('button', { name: 'Permissions for layout-reader@example.com' }).click()
@@ -109,7 +110,7 @@ test('sharing layout edits permissions, creates links, and works on a dark phone
   await page.getByRole('button', { name: 'Open tools', exact: true }).click()
   await page.getByRole('dialog', { name: 'Workspace tools' }).getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog.getByText('People with a link', { exact: true })).toBeVisible()
-  await expect(dialog.getByLabel('Link', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByLabel('Link', { exact: true })).toHaveValue(savedLink)
 })
 
 test('reviewers type inline proposals and comments without changing accepted source', async ({ page, context, browser }) => {
@@ -154,7 +155,7 @@ test('password links open without accounts and allow bounded invitations', async
   const link = await owner.json(`/api/documents/${id}/shares`, 'POST', { kind: 'link', role: 'reviewer', canInvite: true, canExport: false, password: 'test-password' })
   await page.goto(link.url)
   await expect(page.getByRole('form', { name: 'Open shared screenplay' })).toBeVisible()
-  await page.getByLabel('Password, if required').fill('test-password')
+  await page.getByLabel('Password', { exact: true }).fill('test-password')
   await page.getByRole('button', { name: 'Open screenplay', exact: true }).click()
   await expect(editor(page)).toBeVisible()
   expect(new URL(page.url()).hash).toBe('')
@@ -172,6 +173,24 @@ test('password links open without accounts and allow bounded invitations', async
   await page.getByRole('button', { name: 'Open tools', exact: true }).click()
   await page.getByRole('dialog', { name: 'Workspace tools' }).getByRole('button', { name: 'Share', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Share screenplay' })).toBeVisible()
+})
+
+test('password-free share links open directly in fresh browsers', async ({ page, browser }) => {
+  const owner = actor('no-password-owner@example.com')
+  const { id } = await owner.json('/api/documents', 'POST', { title: 'No password needed', text })
+  const link = await owner.json(`/api/documents/${id}/shares`, 'POST', { kind: 'link', role: 'viewer', canInvite: false, canExport: false })
+  await page.goto(link.url)
+  await expect(editor(page)).toBeVisible()
+  await expect(page.getByRole('form', { name: 'Open shared screenplay' })).toHaveCount(0)
+  await expect(page.getByLabel('Password', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: 'Document title' })).toHaveValue('No password needed')
+  const fresh = await browser.newContext()
+  try {
+    const tab = await fresh.newPage()
+    await tab.goto(link.url)
+    await expect(editor(tab)).toBeVisible()
+    await expect(tab.getByRole('form', { name: 'Open shared screenplay' })).toHaveCount(0)
+  } finally { await fresh.close() }
 })
 
 test('failed reviewer requests keep the proposed text available to copy', async ({ page, context }) => {

@@ -33,6 +33,9 @@ export function initializeAccess(db, mode) {
     CREATE TABLE IF NOT EXISTS share_unlocks(session_id TEXT NOT NULL REFERENCES share_sessions(id) ON DELETE CASCADE,grant_id TEXT NOT NULL REFERENCES document_grants(id) ON DELETE CASCADE,PRIMARY KEY(session_id,grant_id));
     CREATE TABLE IF NOT EXISTS document_leaves(document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,user_id TEXT NOT NULL,left_at INTEGER NOT NULL,PRIMARY KEY(document_id,user_id));
   `);
+  if (!db.prepare('PRAGMA table_info(document_grants)').all().some(column => column.name === 'link_token')) {
+    db.exec('ALTER TABLE document_grants ADD COLUMN link_token TEXT');
+  }
 }
 
 export function createAccess(db, { mode, publicURL, changed = () => {} }) {
@@ -151,8 +154,10 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     if (parent && !active(db.prepare('SELECT * FROM document_grants WHERE id=?').get(parent.id))) throw fail(403, 'Invitation access expired');
     const grantId = randomUUID();
     const left = recipient && db.prepare('SELECT left_at FROM document_leaves WHERE document_id=? AND user_id=?').get(id, recipient.id);
-    db.prepare(`INSERT INTO document_grants VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(grantId, id, body.kind, parent?.id || null, req.user.id, email, recipient?.id || null,
-      body.role, Number(body.canInvite), Number(body.canExport), expires, null, raw ? digest(raw) : null, hash, Math.max(Date.now(), (left?.left_at ?? 0) + 1));
+    db.prepare(`INSERT INTO document_grants
+      (id,document_id,kind,parent_id,created_by,email,user_id,role,can_invite,can_export,expires_at,revoked_at,token_hash,password_hash,created_at,link_token)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(grantId, id, body.kind, parent?.id || null, req.user.id, email, recipient?.id || null,
+      body.role, Number(body.canInvite), Number(body.canExport), expires, null, raw ? digest(raw) : null, hash, Math.max(Date.now(), (left?.left_at ?? 0) + 1), raw);
     changed(id);
     return { id: grantId, url: raw ? new URL(`/share#${raw}`, publicURL).href : null, expiresAt: expires, email };
   }
@@ -164,7 +169,9 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
       .all(...(access.owner ? [id] : [id, req.user.id])).map(grant => {
         const row = db.prepare('SELECT * FROM document_grants WHERE id=?').get(grant.id);
         const person = row.user_id && db.prepare('SELECT name FROM accounts WHERE id=?').get(row.user_id);
-        return { ...grant, name: person?.name || null, active: active(row) };
+        const isActive = active(row);
+        return { ...grant, name: person?.name || null, active: isActive,
+          url: isActive && row.link_token ? new URL(`/share#${row.link_token}`, publicURL).href : null };
       });
   }
   function sharingInfo(req, id) {

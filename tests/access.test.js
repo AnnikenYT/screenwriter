@@ -75,6 +75,33 @@ async function fixture(t, options = {}) {
 const document = { title: 'Private', text: 'INT. ROOM - DAY\n\nMARA\nHello.\n' }
 const grant = (email, role = 'viewer', flags = {}) => ({ kind: 'user', email, role, canInvite: false, canExport: false, ...flags })
 
+test('saved link URLs survive restart and are visible only to owners and their creators', async t => {
+  const f = await fixture(t), owner = f.register('saved-owner@example.com'), inviter = f.register('saved-inviter@example.com')
+  const { id } = await owner.json('/api/documents', 'POST', document)
+  const path = `/api/documents/${id}/shares`
+  const flags = { kind: 'link', role: 'viewer', canInvite: false, canExport: false }
+  const link = await owner.json(path, 'POST', flags)
+  await owner.json(path, 'POST', grant(inviter.user.email, 'viewer', { canInvite: true }))
+  const delegated = await inviter.json(path, 'POST', { ...flags, password: 'secret-password' })
+  assert.equal((await owner.json(path)).find(item => item.id === link.id).url, link.url)
+  assert.deepEqual((await inviter.json(path)).map(item => item.url), [delegated.url])
+  await f.restart()
+  assert.equal((await owner.json(path)).find(item => item.id === link.id).url, link.url)
+  assert.equal((await inviter.json(path))[0].url, delegated.url)
+  const visitor = f.client()
+  assert.equal((await visitor.call('/api/shares/open', 'POST', { token: new URL(link.url).hash.slice(1) })).status, 200)
+  assert.equal((await visitor.call(path)).status, 403)
+  await owner.json(`${path}/${link.id}`, 'DELETE')
+  assert.equal((await owner.json(path)).find(item => item.id === link.id).url, null)
+  // Upgrade a hash-only database without breaking its existing links.
+  const legacy = new DatabaseSync(`${f.directory}/workspace.sqlite`)
+  try { legacy.exec('ALTER TABLE document_grants DROP COLUMN link_token') } finally { legacy.close() }
+  await f.restart()
+  assert.equal((await inviter.json(path))[0].url, null)
+  const oldVisitor = f.client()
+  assert.equal((await oldVisitor.call('/api/shares/open', 'POST', { token: new URL(delegated.url).hash.slice(1), password: 'secret-password' })).status, 200)
+})
+
 test('share updates enforce delegation limits, never revive removed shares, and invalidate descendants', async t => {
   const f = await fixture(t), owner = f.register('edit-owner@example.com'), inviter = f.register('edit-inviter@example.com')
   const reader = f.register('edit-reader@example.com'), outsider = f.register('edit-other@example.com')

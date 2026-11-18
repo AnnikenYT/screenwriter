@@ -41,6 +41,7 @@ const documentAccess = ref({ canEdit: false, canReview: false, canExport: false,
 const shareOpen = ref(false)
 const shareToken = ref(location.pathname === '/share' ? location.hash.slice(1) : '')
 const sharePassword = ref('')
+const shareNeedsPassword = ref(false)
 const openingShare = ref(false)
 const workspaceFilter = ref('mine')
 const canCreate = computed(() => session.value?.authMode === 'none' || Boolean(session.value?.user?.account))
@@ -111,7 +112,7 @@ async function initialize() {
   loading.value = true
   try {
     session.value = await api('/api/session')
-    if (shareToken.value) return
+    if (shareToken.value) { await openSharedLink(); return }
     if (!session.value.user) return
     writerName.value = session.value.user.nameSet ? session.value.user.name : ''
     await refreshDocuments()
@@ -130,7 +131,10 @@ async function openSharedLink() {
     shareToken.value = ''; sharePassword.value = ''
     history.replaceState({}, '', `/?document=${result.documentId}`)
     await initialize()
-  } catch (error) { notify(error.message) }
+  } catch (error) {
+    if (error.status === 401 && !shareNeedsPassword.value) shareNeedsPassword.value = true
+    else notify(error.message)
+  }
   finally { openingShare.value = false }
 }
 function cleanup() {
@@ -420,8 +424,8 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
   <form v-else-if="shareToken" class="login-screen" aria-label="Open shared screenplay"
     @submit.prevent="openSharedLink">
     <h1>Shared screenplay</h1>
-    <label class="field-label">Password, if required<input v-model="sharePassword" type="password"
-        autocomplete="current-password" /></label>
+    <label v-if="shareNeedsPassword" class="field-label">Password<input v-model="sharePassword" type="password"
+        autocomplete="current-password" required /></label>
     <button class="primary-button" :disabled="openingShare">Open screenplay</button>
     <p v-if="error" class="error-text">{{ error }}</p>
   </form>
