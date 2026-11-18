@@ -271,7 +271,7 @@ async function decideSuggestion(suggestion, decision) {
 }
 function editName() { writerName.value = session.value.user.name; profileOpen.value = true; nextTick(() => document.getElementById('writer-name')?.focus()) }
 function applyProfile(user) {
-  if (!user || session.value?.authMode !== 'none' || user.id !== session.value.user.id) return
+  if (!user || !session.value?.user || (session.value.authMode !== 'none' && !session.value.user.guest) || user.id !== session.value.user.id) return
   session.value.user = user
   connection.value?.provider.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: `${user.color}25` })
 }
@@ -483,7 +483,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       <div class="toolbar-actions">
         <a v-if="session.user.guest" class="text-button" :href="signInURL()">Sign in</a>
         <div class="collaborators" :title="[session.user.name + ' (you)', ...peers.map(p => p.name)].join(', ')"><button
-            v-if="session.authMode === 'none'" class="avatar" :style="{ background: session.user.color }"
+            v-if="session.authMode === 'none' || session.user.guest" class="avatar" :style="{ background: session.user.color }"
             aria-label="Set writer name" :title="`${session.user.name} · Set your name`" @click="editName">{{
               session.user.name.slice(0, 1) }}</button><span v-else class="avatar"
             :style="{ background: session.user.color }">{{ session.user.name.slice(0, 1) }}</span><span
@@ -511,7 +511,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       </div>
     </header>
 
-    <form v-if="session.authMode === 'none' && !session.user.nameSet && !profileOpen" class="writer-name-nag"
+    <form v-if="(session.authMode === 'none' || session.user.guest) && !session.user.nameSet && !profileOpen" class="writer-name-nag"
       aria-label="Set your writer name" @submit.prevent="saveName">
       <label for="quick-writer-name">Who’s writing? <span>Add your name for collaborators.</span></label>
       <input id="quick-writer-name" v-model="writerName" aria-label="Your writer name" placeholder="Your name"

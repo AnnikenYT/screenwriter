@@ -193,6 +193,33 @@ test('password-free share links open directly in fresh browsers', async ({ page,
   } finally { await fresh.close() }
 })
 
+test('link guests set and change their name with live presence and reload persistence', async ({ page, browser }) => {
+  const owner = actor('named-link-owner@example.com')
+  const { id } = await owner.json('/api/documents', 'POST', { title: 'Named guest', text })
+  const link = await owner.json(`/api/documents/${id}/shares`, 'POST', { kind: 'link', role: 'reviewer', canInvite: false, canExport: false })
+  const ownerContext = await browser.newContext()
+  try {
+    await owner.login(ownerContext)
+    const ownerPage = await ownerContext.newPage()
+    await ownerPage.goto(`${base}/?document=${id}`)
+    await expect(editor(ownerPage)).toBeVisible()
+    await page.goto(link.url)
+    await page.getByRole('textbox', { name: 'Your writer name', exact: true }).fill('Link Writer')
+    await page.getByRole('button', { name: 'Save name', exact: true }).click()
+    await expect(page.getByRole('form', { name: 'Set your writer name' })).toHaveCount(0)
+    await expect(ownerPage.locator('.collaborators')).toHaveAttribute('title', /Link Writer/)
+    await page.getByRole('button', { name: 'Set writer name', exact: true }).click()
+    const profile = page.getByRole('dialog', { name: 'Your writer name' })
+    await profile.getByRole('textbox', { name: 'Display name' }).fill('Renamed Guest')
+    await profile.getByRole('button', { name: 'Save name', exact: true }).click()
+    await expect(ownerPage.locator('.collaborators')).toHaveAttribute('title', /Renamed Guest/)
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Set writer name', exact: true })).toHaveAttribute('title', /Renamed Guest/)
+    await expect(page.getByRole('form', { name: 'Set your writer name' })).toHaveCount(0)
+    expect((await (await page.request.get(`${base}/api/session`)).json()).user).toMatchObject({ name: 'Renamed Guest', nameSet: true, guest: true })
+  } finally { await ownerContext.close() }
+})
+
 test('failed reviewer requests keep the proposed text available to copy', async ({ page, context }) => {
   const owner = actor('draft-owner@example.com'), reviewer = actor('draft-reviewer@example.com')
   const { id } = await owner.json('/api/documents', 'POST', { title: 'Unsaved review', text })

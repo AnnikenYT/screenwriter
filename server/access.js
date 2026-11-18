@@ -36,6 +36,9 @@ export function initializeAccess(db, mode) {
   if (!db.prepare('PRAGMA table_info(document_grants)').all().some(column => column.name === 'link_token')) {
     db.exec('ALTER TABLE document_grants ADD COLUMN link_token TEXT');
   }
+  if (!db.prepare('PRAGMA table_info(share_sessions)').all().some(column => column.name === 'name')) {
+    db.exec('ALTER TABLE share_sessions ADD COLUMN name TEXT');
+  }
 }
 
 export function createAccess(db, { mode, publicURL, changed = () => {} }) {
@@ -61,7 +64,14 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     const raw = cookie(req, 'screenplay_share');
     if (!raw || !/^[A-Za-z0-9_-]{43}$/.test(raw)) return null;
     const row = db.prepare('SELECT * FROM share_sessions WHERE id=? AND expires_at>?').get(digest(raw), Date.now());
-    return row ? { id: row.visitor_id, name: `Guest ${row.visitor_id.slice(-4)}`, color: '#7c3aed', guest: true } : null;
+    return row ? { id: row.visitor_id, name: row.name || `Guest ${row.visitor_id.slice(-4)}`, nameSet: Boolean(row.name), color: '#7c3aed', guest: true } : null;
+  }
+  function setGuestName(req, name) {
+    if (!req.user?.guest) throw fail(403, 'Not permitted');
+    const result = db.prepare('UPDATE share_sessions SET name=? WHERE id=? AND visitor_id=? AND expires_at>?')
+      .run(name, guestSession(req), req.user.id, Date.now());
+    if (!result.changes) throw fail(401, 'Session expired');
+    return guest(req);
   }
   function guestSession(req) {
     const raw = cookie(req, 'screenplay_share');
@@ -247,7 +257,7 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
       const raw = randomBytes(32).toString('base64url');
       session = digest(raw);
       row = { visitor_id: `guest:${randomUUID()}` };
-      db.prepare('INSERT INTO share_sessions VALUES(?,?,?)').run(session, row.visitor_id, now + 7 * 86400000);
+      db.prepare('INSERT INTO share_sessions(id,visitor_id,expires_at) VALUES(?,?,?)').run(session, row.visitor_id, now + 7 * 86400000);
       res.cookie('screenplay_share', raw, { httpOnly: true, secure: publicURL.protocol === 'https:', sameSite: 'lax', path: '/', maxAge: 7 * 86400000 });
     }
     db.prepare('INSERT OR IGNORE INTO share_unlocks VALUES(?,?)').run(session, grant.id);
@@ -257,5 +267,5 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     for (const [key, value] of attempts) if (value.until < Date.now()) attempts.delete(key);
     db.prepare('DELETE FROM share_sessions WHERE expires_at<=?').run(Date.now());
   }
-  return { account, guest, permission, requirePermission, publicPermission, list, createGrant, shares, sharingInfo, updateGrant, revoke, leave, openLink, cleanup };
+  return { account, guest, setGuestName, permission, requirePermission, publicPermission, list, createGrant, shares, sharingInfo, updateGrant, revoke, leave, openLink, cleanup };
 }

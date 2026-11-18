@@ -125,12 +125,12 @@ export function createWorkspace(options = {}) {
     res.json({ authMode, user: req.user || null });
   });
   app.patch('/api/session', (req, res) => {
-    if (authMode !== 'none') throw fail(403, 'Display names are managed by your identity provider');
+    if (authMode !== 'none' && !req.user?.guest) throw fail(403, 'Display names are managed by your identity provider');
     const name = req.body?.name;
     if (typeof name !== 'string' || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name) ||
       name.trim().length < 1 || name.trim().length > 60) throw fail(400, 'Name must be 1–60 characters on one line, without control characters');
-    const user = { ...req.user, name: name.trim(), nameSet: true };
-    db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
+    const user = req.user.guest ? access.setGuestName(req, name.trim()) : { ...req.user, name: name.trim(), nameSet: true };
+    if (!req.user.guest) db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
     res.setHeader('Cache-Control', 'no-store');
     res.json({ authMode, user });
   });

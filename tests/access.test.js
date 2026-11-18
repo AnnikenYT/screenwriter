@@ -75,6 +75,34 @@ async function fixture(t, options = {}) {
 const document = { title: 'Private', text: 'INT. ROOM - DAY\n\nMARA\nHello.\n' }
 const grant = (email, role = 'viewer', flags = {}) => ({ kind: 'user', email, role, canInvite: false, canExport: false, ...flags })
 
+test('link guests can save a name without changing identity, expiry, access or other guests', async t => {
+  const f = await fixture(t), owner = f.register('guest-name-owner@example.com')
+  const { id } = await owner.json('/api/documents', 'POST', document)
+  const link = await owner.json(`/api/documents/${id}/shares`, 'POST', { kind: 'link', role: 'reviewer', canInvite: false, canExport: false })
+  const visitor = f.client(), other = f.client()
+  const token = new URL(link.url).hash.slice(1)
+  await visitor.json('/api/shares/open', 'POST', { token })
+  await other.json('/api/shares/open', 'POST', { token })
+  const before = (await visitor.json('/api/session')).user
+  const otherBefore = (await other.json('/api/session')).user
+  const expiry = f.db.prepare('SELECT expires_at FROM share_sessions WHERE visitor_id=?').get(before.id).expires_at
+  const cookie = visitor.cookie
+  for (const name of ['', '  ', 'a\nb', 'a'.repeat(61), 'a\u200bb']) {
+    assert.equal((await visitor.call('/api/session', 'PATCH', { name })).status, 400)
+  }
+  const updated = await visitor.json('/api/session', 'PATCH', { name: '  Guest Writer  ' })
+  assert.deepEqual(updated.user, { ...before, name: 'Guest Writer', nameSet: true })
+  assert.equal(visitor.cookie, cookie)
+  assert.equal(f.db.prepare('SELECT expires_at FROM share_sessions WHERE visitor_id=?').get(before.id).expires_at, expiry)
+  assert.deepEqual((await other.json('/api/session')).user, otherBefore)
+  assert.equal((await visitor.json(`/api/documents/${id}`)).access.role, 'reviewer')
+  assert.equal((await owner.call('/api/session', 'PATCH', { name: 'Not allowed' })).status, 403)
+  await f.restart()
+  assert.deepEqual((await visitor.json('/api/session')).user, updated.user)
+  await visitor.json('/api/shares/open', 'POST', { token })
+  assert.equal((await visitor.json('/api/session')).user.name, 'Guest Writer')
+})
+
 test('saved link URLs survive restart and are visible only to owners and their creators', async t => {
   const f = await fixture(t), owner = f.register('saved-owner@example.com'), inviter = f.register('saved-inviter@example.com')
   const { id } = await owner.json('/api/documents', 'POST', document)
