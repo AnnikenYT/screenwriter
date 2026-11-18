@@ -162,6 +162,7 @@ test('password links open without accounts and allow bounded invitations', async
   await expect(page.getByRole('button', { name: 'Export', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Share screenplay', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Share screenplay' })
+  await expect(dialog.getByRole('button', { name: 'Leave screenplay', exact: true })).toHaveCount(0)
   await dialog.getByLabel('Email', { exact: true }).fill('guest-invited@example.com')
   await expect(dialog.getByLabel('Role', { exact: true }).locator('option')).toHaveText(['viewer', 'reviewer'])
   await expect(dialog.getByLabel('Can export', { exact: true })).toBeDisabled()

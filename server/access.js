@@ -218,6 +218,7 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
   }
   function leave(req, id) {
     const access = requirePermission(req, id);
+    if (!req.user?.account) throw fail(403, 'Only signed-in users can leave a document');
     if (access.owner || mode !== 'oauth') throw fail(403, 'Owners cannot leave their document');
     const now = Date.now();
     db.exec('BEGIN IMMEDIATE');

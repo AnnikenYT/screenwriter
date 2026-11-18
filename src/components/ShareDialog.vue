@@ -156,7 +156,7 @@ onUnmounted(() => previousFocus?.isConnected && previousFocus.focus())
         <p v-if="status" class="small muted" role="status">{{ status }}</p>
         <footer class="share-footer">
           <button class="text-button share-copy-button" @click="copy()"><Link :size="17" />Copy link</button>
-          <button v-if="!access.owner" class="text-button danger-button" :disabled="busy" @click="leave">Leave screenplay</button>
+          <button v-if="!access.owner && user?.account" class="text-button danger-button" :disabled="busy" @click="leave">Leave screenplay</button>
           <button class="primary-button" :disabled="busy" @click="emit('close')">Done</button>
         </footer>
       </section>
