@@ -2,7 +2,7 @@
 
 # Screenwriter
 
-Basic self-hosted collaborative [Fountain](https://fountain.io/syntax/) screenplay editor.
+Basic self-hosted collaborative [Fountain](https://fountain.io/syntax/) screenplay editor meant to be used as a drop-in replacement for google docs without any ai bs and just basic writing tools (location- and character sheets, and of course, fountain rendering).
 
 Built with: Vue 3, CodeMirror 6, Yjs, Node 24 and SQLite.
 
