@@ -15,6 +15,7 @@ import ShareDialog from './components/ShareDialog.vue'
 import { connect } from './lib/collaboration.js'
 import { api, download } from './lib/api.js'
 import { parseFountain } from '../shared/fountain.js'
+import { outlineEntries, sortOutline } from './lib/outline.js'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useMobileLayout } from './lib/mobile.js'
@@ -58,6 +59,8 @@ const status = ref('connecting')
 const peers = ref([])
 const sidebar = ref(window.innerWidth > 900)
 const panel = ref('outline')
+const sceneSort = ref('script')
+const characterSort = ref('name')
 const mode = ref(localStorage.getItem('editor-mode') || 'live')
 const reviewMode = ref(false)
 const selection = ref({ from: 0, to: 0, text: '' })
@@ -96,7 +99,7 @@ const tabs = [
   { id: 'versions', label: 'Versions', icon: History },
 ]
 const panelTitle = computed(() => tabs.find(t => t.id === panel.value)?.label)
-const outline = computed(() => blocks.value.filter(b => ['scene', 'section', 'synopsis'].includes(b.type)))
+const outline = computed(() => sortOutline(outlineEntries(blocks.value), sceneSort.value))
 const words = computed(() => source.value.trim() ? source.value.trim().split(/\s+/).length : 0)
 const activeComments = computed(() => { void revision.value; return connection.value ? [...connection.value.doc.getMap('comments').values()].filter(c => !c.parentId && !c.resolved).length + [...connection.value.doc.getMap('suggestions').values()].filter(s => s.status === 'pending').length : 0 })
 const scratchHtml = computed(() => { void revision.value; return DOMPurify.sanitize(marked.parse(connection.value?.scratchpad.toString() || '')) })
@@ -594,10 +597,18 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
           <div v-if="panel === 'outline'" class="outline panel-body">
             <div class="outline-summary"><span>{{ words.toLocaleString() }} words</span><span>~{{ estimate }} {{
               estimate === 1 ? 'page' : 'pages' }}</span></div>
-            <button v-for="(block, i) in outline" :key="block.from"
-              :class="['outline-item', block.type, { current: cursor.line >= block.startLine && cursor.line < (outline[i + 1]?.startLine || Infinity) }]"
-              @click="goTo(block.from)"><span v-if="block.type === 'scene'" class="outline-number">{{block.sceneNumber
-                || outline.slice(0, i + 1).filter(b => b.type === 'scene').length }}</span><span>{{
+            <label class="panel-sort outline-sort">Sort scenes
+              <select v-model="sceneSort">
+                <option value="script">Script order</option>
+                <option value="reverse">Reverse script order</option>
+                <option value="heading">Heading (A–Z)</option>
+                <option value="heading-desc">Heading (Z–A)</option>
+              </select>
+            </label>
+            <p v-if="sceneSort !== 'script' && outline.length" class="field-hint outline-sort">Sections and synopses are shown in script order only.</p>
+            <button v-for="{ block, number, nextLine } in outline" :key="block.from"
+              :class="['outline-item', block.type, { current: cursor.line >= block.startLine && cursor.line < nextLine }]"
+              @click="goTo(block.from)"><span v-if="number" class="outline-number">{{ number }}</span><span>{{
                   block.text.replace(/^#+\s*|^=\s*/, '') }}</span></button>
             <div v-if="!outline.length" class="empty-state">
               <List :size="25" />
@@ -605,7 +616,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
                 write.</small><code>INT. SOMEWHERE - DAY</code>
             </div>
           </div>
-          <SheetPanel v-else-if="['characters', 'locations'].includes(panel)" :key="currentId + panel"
+          <SheetPanel v-else-if="['characters', 'locations'].includes(panel)" :key="currentId + panel" v-model:sort="characterSort"
             :doc="connection.doc" :document-id="currentId" :kind="panel" :revision="revision" :blocks="blocks"
             @error="notify" @jump="goTo" />
           <ReviewPanel v-else-if="panel === 'review'" ref="review" :key="currentId" :doc="connection.doc"

@@ -7,7 +7,9 @@ import { api } from '../lib/api.js'
 import { renameSheet, readSheet, sheetFieldKey } from '../lib/collaboration.js'
 import { characterName, locationName } from '../../shared/fountain.js'
 import { changeSheetStatus } from '../../shared/entities.js'
+import { dialogueLineCounts } from '../../shared/dialogue.js'
 const props = defineProps({ doc: Object, documentId: String, kind: String, revision: Number, blocks: Array })
+const sort = defineModel('sort')
 const emit = defineEmits(['error', 'jump'])
 const selectedId = ref(null)
 const filter = ref('')
@@ -15,7 +17,26 @@ const editing = ref('notes')
 const uploading = ref(false)
 const archived = ref(false)
 const map = computed(() => props.doc.getMap(props.kind))
-const sheets = computed(() => { void props.revision; return [...map.value.values()].filter(s => archived.value ? s.status === 'archived' : !s.status || s.status === 'active').map(sheet => readSheet(props.doc, props.kind, sheet)).sort((a, b) => a.name.localeCompare(b.name)).filter(s => s.name.toLowerCase().includes(filter.value.toLowerCase())) })
+const counts = computed(() => dialogueLineCounts(props.blocks))
+const lineCount = name => counts.value.get(name.toUpperCase()) ?? 0
+const lineLabel = count => `${count.toLocaleString()} dialogue ${count === 1 ? 'line' : 'lines'}`
+const sheets = computed(() => {
+  void props.revision
+  const characters = props.kind === 'characters'
+  return [...map.value.values()]
+    .filter(s => archived.value ? s.status === 'archived' : !s.status || s.status === 'active')
+    .map(sheet => readSheet(props.doc, props.kind, sheet))
+    .filter(s => s.name.toLowerCase().includes(filter.value.toLowerCase()))
+    .map(sheet => characters ? { ...sheet, lines: lineCount(sheet.name) } : sheet)
+    .sort((a, b) => {
+      const alphabetical = a.name.localeCompare(b.name)
+      if (!characters) return alphabetical
+      if (sort.value === 'name-desc') return -alphabetical
+      if (sort.value === 'lines') return b.lines - a.lines || alphabetical
+      if (sort.value === 'lines-asc') return a.lines - b.lines || alphabetical
+      return alphabetical
+    })
+})
 const selected = computed(() => { void props.revision; const sheet = map.value.get(selectedId.value); return sheet && sheet.status !== 'deleted' ? readSheet(props.doc, props.kind, sheet) : null })
 function lifecycle(status) {
   if (status === 'deleted' && !window.confirm(`Delete “${selected.value.name}” and its sheet notes and moodboard? Screenplay text is unchanged. Older saved versions may still contain this sheet.`)) return
@@ -53,16 +74,25 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
     <template v-if="!selected">
       <p class="panel-intro">Created automatically from {{ kind === 'characters' ? 'speaking characters' : 'scene headings' }}.</p>
       <div class="segmented lifecycle-tabs"><button :class="{ active: !archived }" @click="archived = false">Active</button><button :class="{ active: archived }" @click="archived = true">Archived</button></div>
+      <label v-if="kind === 'characters'" class="panel-sort">Sort characters
+        <select v-model="sort">
+          <option value="name">Name (A–Z)</option>
+          <option value="name-desc">Name (Z–A)</option>
+          <option value="lines">Most dialogue lines</option>
+          <option value="lines-asc">Fewest dialogue lines</option>
+        </select>
+      </label>
       <input v-model="filter" class="search-input" :placeholder="`Find ${kind === 'characters' ? 'a character' : 'a location'}…`" :aria-label="`Search ${kind}`" />
       <button v-for="sheet in sheets" :key="sheet.id" class="sheet-list-item" @click="selectedId = sheet.id">
         <span class="sheet-initial"><UserRound v-if="kind === 'characters'" :size="17" /><MapPin v-else :size="17" /></span>
-        <span><strong>{{ sheet.name }}</strong><small>{{ sheet.tagline || (kind === 'characters' ? 'Character sheet' : 'Location sheet') }}</small></span>
+        <span><strong>{{ sheet.name }}</strong><small>{{ sheet.tagline || (kind === 'characters' ? 'Character sheet' : 'Location sheet') }}</small><small v-if="kind === 'characters'">{{ lineLabel(sheet.lines) }}</small></span>
         <span class="arrow">›</span>
       </button>
       <div v-if="!sheets.length" class="empty-state">{{ archived ? 'No archived sheets.' : 'No active sheets. Write a new name in the screenplay to discover a sheet.' }}</div>
     </template>
     <template v-else>
       <button class="text-button back-link" @click="selectedId = null"><ArrowLeft :size="14" /> All {{ kind }}</button>
+      <p v-if="kind === 'characters'" class="field-hint">{{ lineLabel(lineCount(selected.name)) }}</p>
       <div v-if="doc.access?.canEdit !== false" class="lifecycle-actions">
         <button v-if="selected.status === 'archived'" class="text-button" @click="lifecycle('active')">Restore sheet</button>
         <button v-else class="text-button" @click="lifecycle('archived')">Archive sheet</button>
