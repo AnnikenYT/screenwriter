@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { parseFountain, plainText, inlineFountain, createNameMatcher } from '../shared/fountain.js';
+import { DEFAULT_TITLE_PAGE_ALIGNMENT } from '../shared/preferences.js';
 
 const TOP = 54, BOTTOM = 738, LINE = 12;
 const fontFor = run => `Courier${run.bold && run.italic ? '-BoldOblique' : run.bold ? '-Bold' : run.italic ? '-Oblique' : ''}`;
@@ -63,20 +64,20 @@ function titleFields(blocks) {
 }
 
 // Exported separately so layout can be tested without scraping compressed PDFs.
-export function writeScreenplay(pdf, text, title) {
+export function writeScreenplay(pdf, text, title, alignment = DEFAULT_TITLE_PAGE_ALIGNMENT) {
   const blocks = parseFountain(text);
   const names = createNameMatcher(blocks);
   const fields = titleFields(blocks);
   const lastTitle = blocks.findLastIndex(block => block.type === 'title');
   pdf.fontSize(12).font('Courier');
-  const titleArea = (value, x, y, width, align = 'center', maxLines = 8) => {
+  const titleArea = (value, x, y, width, align, maxLines) => {
     if (!value) return;
     for (const [index, line] of wrappedLines(pdf, value, width).slice(0, maxLines).entries()) drawLine(pdf, line, x, y + index * LINE, width, align);
   };
-  titleArea(fields.title || title || 'Untitled screenplay', 108, 228, 432, 'center', 5);
-  titleArea(fields.credit || ((fields.author || fields.authors) ? 'Written by' : ''), 108, 300, 432, 'center', 2);
-  titleArea(fields.author || fields.authors, 108, 336, 432, 'center', 4);
-  titleArea(fields.source, 108, 408, 432, 'center', 6);
+  titleArea(fields.title || title || 'Untitled screenplay', 108, 228, 432, alignment, 5);
+  titleArea(fields.credit || ((fields.author || fields.authors) ? 'Written by' : ''), 108, 300, 432, alignment, 2);
+  titleArea(fields.author || fields.authors, 108, 336, 432, alignment, 4);
+  titleArea(fields.source, 108, 408, 432, alignment, 6);
   titleArea(fields.contact, 108, 636, 270, 'left', 6);
   titleArea([fields['draft date'], fields.copyright].filter(Boolean).join('\n'), 378, 660, 162, 'right', 4);
   pdf.addPage();
@@ -150,9 +151,9 @@ export function writeScreenplay(pdf, text, title) {
   }
 }
 
-export function renderPDF(text, title, response) {
+export function renderPDF(text, title, response, alignment) {
   const pdf = new PDFDocument({ size: 'LETTER', margins: { top: TOP, bottom: 54, left: 108, right: 72 }, bufferPages: true, info: { Title: plainText(title || 'Untitled screenplay') } });
   pdf.pipe(response);
-  writeScreenplay(pdf, text, title);
+  writeScreenplay(pdf, text, title, alignment);
   pdf.end();
 }

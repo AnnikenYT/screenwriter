@@ -656,7 +656,7 @@ test('suggestion decisions preserve proposal and existing annotation ranges with
   }
 });
 
-test('PDF layout formats a separate title page, dual dialogue, blanks, emphasis and synchronized pagination', () => {
+function recordPDF() {
   const calls = [];
   let page = 0, count = 1, font = 'Courier';
   const pdf = {
@@ -668,6 +668,27 @@ test('PDF layout formats a separate title page, dual dialogue, blanks, emphasis 
     bufferedPageRange() { return { start: 0, count }; },
     switchToPage(index) { page = index; return this; },
   };
+  return { calls, pdf };
+}
+
+test('PDF title page alignment moves the main fields without moving contact or script text', () => {
+  const text = 'Title: Project\nCredit: By\nAuthor: Ada\nSource: Novel\nContact: ada@example.com\nDraft Date: Nov 23\n\n!Action.';
+  for (const [alignment, factor] of [[undefined, 0.5], ['left', 0], ['right', 1]]) {
+    const { calls, pdf } = recordPDF();
+    writeScreenplay(pdf, text, 'Fallback', alignment);
+    for (const field of ['Project', 'By', 'Ada', 'Novel']) {
+      const call = calls.find(call => call.text === field);
+      assert.equal(call.page, 0);
+      assert.equal(call.x, 108 + (432 - pdf.widthOfString(field)) * factor);
+    }
+    assert.equal(calls.find(call => call.text === 'ada@example.com').x, 108);
+    assert.equal(calls.find(call => call.text === 'Nov 23').x, 540 - pdf.widthOfString('Nov 23'));
+    assert.equal(calls.find(call => call.text === 'Action.').x, 108);
+  }
+});
+
+test('PDF layout formats a separate title page, dual dialogue, blanks, emphasis and synchronized pagination', () => {
+  const { calls, pdf } = recordPDF();
   const text = `Title: **THE FILM**
 Credit: Written by
 Author: Ada Writer
@@ -717,7 +738,7 @@ ${'A long right dialogue. '.repeat(300)}
     assert.ok(calls.some(call => call.text === text && call.font === 'Courier-Bold' && call.underline));
   }
   assert.equal(calls.find(call => call.text === 'Next page.').page, 2);
-  assert.ok(count > 3);
+  assert.ok(pdf.bufferedPageRange().count > 3);
   for (const call of calls.filter(call => call.y >= 54)) assert.ok(call.y + 12 <= 738, 'body stays inside page margins');
   assert.ok(calls.some(call => call.text === '2.' && call.page === 2 && call.y === 30));
   assert.ok(!calls.some(call => call.text === '1.' && call.y === 30));

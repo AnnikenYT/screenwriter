@@ -6,7 +6,11 @@ let development, directory
 test.beforeAll(async () => {
   directory = await mkdtemp('/tmp/screenwriter/screenwriter-dev-oauth-')
   development = await startOAuthDevelopment({
-    ...process.env, DEV_OAUTH_UI_PORT: '5321', DEV_OAUTH_API_PORT: '3321', DEV_OAUTH_ISSUER_PORT: '4321', DEV_OAUTH_DATA_DIR: directory,
+    ...process.env,
+    DEV_OAUTH_UI_PORT: process.env.DEV_OAUTH_UI_PORT || '5321',
+    DEV_OAUTH_API_PORT: process.env.DEV_OAUTH_API_PORT || '3321',
+    DEV_OAUTH_ISSUER_PORT: process.env.DEV_OAUTH_ISSUER_PORT || '4321',
+    DEV_OAUTH_DATA_DIR: directory,
   })
 })
 test.afterAll(async () => { await development?.close(); if (directory) await rm(directory, { recursive: true, force: true }) })
@@ -17,6 +21,36 @@ async function signIn(page, name) {
   await page.getByRole('button', { name, exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'Screenplay editor' })).toBeVisible()
 }
+
+test('title page settings follow an account in a fresh browser context and stay separate from other accounts', async ({ page, browser }) => {
+  await signIn(page, 'Alice')
+  const created = await page.request.post(`${development.url}/api/documents`, {
+    data: { title: 'Account alignment', text: 'Title: Account alignment\n\nINT. ROOM - DAY\n' },
+  })
+  expect(created.ok()).toBe(true)
+  const { id } = await created.json()
+  const url = `${development.url}/?document=${id}`
+  await page.goto(url)
+  await page.getByRole('textbox', { name: 'Screenplay editor' }).press('Control+End')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  const alignment = page.getByLabel('Title page alignment')
+  await expect(alignment).toHaveValue('center')
+  await alignment.selectOption('right')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.locator('.ft-title.ft-rendered').first()).toHaveCSS('text-align', 'right')
+  const fresh = await browser.newContext()
+  try {
+    const tab = await fresh.newPage()
+    await signIn(tab, 'Alice')
+    await tab.goto(url)
+    await tab.getByRole('button', { name: 'Split', exact: true }).click()
+    await expect(tab.locator('.title-page-main')).toHaveCSS('text-align', 'right')
+    await tab.goto(`${development.url}/auth/logout`)
+    await signIn(tab, 'Bob')
+    await tab.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(tab.getByLabel('Title page alignment')).toHaveValue('center')
+  } finally { await fresh.close() }
+})
 
 test('development login uses real browser redirects with separate Alice and Bob workspaces', async ({ page, browser }) => {
   const errors = []

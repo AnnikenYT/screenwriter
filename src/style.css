@@ -202,7 +202,7 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .live-editor .ft-transition.ft-rendered { text-align: right; }
 .live-editor .ft-centered.ft-rendered { text-align: center; }
 .live-editor .ft-lyric.ft-rendered { font-style: italic; }
-.live-editor .ft-title.ft-rendered { text-align: center; }
+.live-editor .ft-title.ft-rendered { text-align: var(--title-page-alignment, center); }
 .text-editor .ft-section { color: #a18c60; font-weight: 600; font-family: inherit; }
 /* CodeMirror measures line boxes, not margins. Keep the heading height stable while editing. */
 .live-editor .ft-section.cm-line { font-family: Inter, sans-serif; font-size: 10px; letter-spacing: 1px; padding-bottom: 18px; border-bottom: 1px solid transparent; }
@@ -271,7 +271,7 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .fountain.centered, .fountain.title { text-align: center; }
 .fountain.title { padding: 30px 0 70px; font-size: 16px; }
 .title-page { min-height: 470px; white-space: pre-wrap; display: flex; flex-direction: column; border-bottom: 1px dashed #e2e3d8; margin-bottom: 35px; }
-.title-page-main { text-align: center; padding-top: 100px; }
+.title-page-main { text-align: var(--title-page-alignment, center); padding-top: 100px; }
 .title-page-main h1 { font-size: 1.2em; font-weight: 400; line-height: 1.6; margin-bottom: 35px; }
 .title-page-main p { margin: 10px 0; }
 .title-page-contact { margin-top: auto; font-size: .8em; padding: 30px 0; }
@@ -371,6 +371,9 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .modal h2 { font-size: 16px; font-weight: 500; color: #556646; margin: 5px 0 15px; }
 .modal footer { display: flex; gap: 25px; align-items: center; justify-content: space-between; padding-top: 20px; }
 .modal footer .primary-button { white-space: nowrap; }
+.settings-dialog { width: 360px; max-width: calc(100% - 32px); color: inherit; }
+.settings-dialog::backdrop { background: #26301b50; backdrop-filter: blur(3px); }
+.settings-dialog select { font: inherit; font-size: 13px; min-height: 36px; background: var(--paper); color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
 .version-modal { width: 850px; display: flex; flex-direction: column; }
 .version-source { overflow: auto; white-space: pre-wrap; padding: 25px; background: #f6f7ee; font-size: 12px; min-height: 100px; line-height: 1.6; }
 .syntax-reference { font-size: 11px; display: grid; grid-template-columns: 135px 1fr; gap: 20px 12px; line-height: 1.7; margin: 26px 0; }

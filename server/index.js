@@ -17,6 +17,7 @@ import { renderPDF } from './pdf.js';
 import { reconcileSheets } from '../shared/entities.js';
 import { createAccess, normalizeEmail } from './access.js';
 import { applyReviewChanges, projectReview } from '../shared/review-model.js';
+import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js';
 import nodemailer from 'nodemailer';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -60,6 +61,14 @@ export function createWorkspace(options = {}) {
     db.exec('ALTER TABLE documents ADD COLUMN archived_at INTEGER');
   }
   const access = createAccess(db, { mode: authMode, publicURL, changed: invalidateAccess });
+  db.exec(`CREATE TABLE IF NOT EXISTS account_preferences(
+    account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+    title_page_alignment TEXT NOT NULL
+  )`);
+  const getAccountAlignment = db.prepare('SELECT title_page_alignment FROM account_preferences WHERE account_id=?');
+  const setAccountAlignment = db.prepare(`INSERT INTO account_preferences(account_id,title_page_alignment) VALUES(?,?)
+    ON CONFLICT(account_id) DO UPDATE SET title_page_alignment=excluded.title_page_alignment`);
+  const accountAlignment = id => titlePageAlignment(getAccountAlignment.get(id)?.title_page_alignment);
   const appendUpdate = db.prepare('INSERT INTO document_updates(document_id,state) VALUES(?,?)');
   const updateMetadata = db.prepare('UPDATE documents SET title=?,updated_at=? WHERE id=?');
   const selectUpdates = db.prepare('SELECT state FROM document_updates WHERE document_id=? ORDER BY sequence');
@@ -122,7 +131,8 @@ export function createWorkspace(options = {}) {
   });
   app.get('/api/session', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ authMode, user: req.user || null });
+    res.json({ authMode, user: req.user || null,
+      ...(req.user?.account ? { preferences: { titlePageAlignment: accountAlignment(req.user.id) } } : {}) });
   });
   app.patch('/api/session', (req, res) => {
     if (authMode !== 'none' && !req.user?.guest) throw fail(403, 'Display names are managed by your identity provider');
@@ -217,6 +227,13 @@ export function createWorkspace(options = {}) {
     next();
   }
   app.use(['/api', '/uploads'], requireUser, (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  app.patch('/api/preferences', (req, res) => {
+    if (!req.user.account) throw fail(403, 'Sign in to save account preferences');
+    const alignment = req.body?.titlePageAlignment;
+    if (!TITLE_PAGE_ALIGNMENTS.includes(alignment)) throw fail(400, 'Title page alignment must be left, center or right');
+    setAccountAlignment.run(req.user.id, alignment);
+    res.json({ titlePageAlignment: alignment });
+  });
   const documents = new Map();
   function permissions(req, id, action) { return access.requirePermission(req, id, action); }
   function socketAccess(ws) {
@@ -727,7 +744,8 @@ export function createWorkspace(options = {}) {
     const { doc } = getDocument(req.params.id);
     res.type('application/pdf');
     res.setHeader('Content-Disposition', "attachment; filename=\"screenplay.pdf\"");
-    renderPDF(doc.getText('screenplay').toString(), titleOf(doc), res);
+    const alignment = req.user.account ? accountAlignment(req.user.id) : titlePageAlignment(req.query.titlePageAlignment);
+    renderPDF(doc.getText('screenplay').toString(), titleOf(doc), res, alignment);
   });
   app.get('/api/documents/:id/export.fountain', (req, res) => {
     const { doc } = getDocument(req.params.id);

@@ -22,8 +22,18 @@ import DOMPurify from 'dompurify'
 import { useMobileLayout } from './lib/mobile.js'
 import { usePwa } from './lib/pwa.js'
 import { flushCollaboration } from './lib/sync-barrier.js'
+import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js'
+import { Settings } from 'lucide-vue-next'
 
 const session = ref(null)
+const alignmentStorageKey = 'screenwriter-title-page-alignment'
+const localAlignment = ref(titlePageAlignment(localStorage.getItem(alignmentStorageKey)))
+const alignment = computed(() => session.value?.user?.account
+  ? titlePageAlignment(session.value.preferences?.titlePageAlignment) : localAlignment.value)
+const settingsDialog = ref(null)
+const draftAlignment = ref(alignment.value)
+const savingPreferences = ref(false)
+const settingsError = ref('')
 const { mobile, keyboardOpen } = useMobileLayout()
 const { installed, updateAvailable, register: registerPwa, install: installPwa, applyUpdate: applyPwaUpdate } = usePwa()
 const mobilePane = ref('write')
@@ -51,6 +61,8 @@ const visibleDocuments = computed(() => session.value?.authMode !== 'oauth' ? do
 const managerOpen = ref(false)
 const roomUnavailable = ref(false)
 const currentId = ref('')
+const pdfURL = computed(() => `/api/documents/${currentId.value}/export.pdf`
+  + (session.value?.user?.account ? '' : `?titlePageAlignment=${alignment.value}`))
 const connection = shallowRef(null)
 const revision = ref(0)
 const source = ref('')
@@ -107,6 +119,26 @@ const activeComments = computed(() => { void revision.value; return connection.v
 const scratchHtml = computed(() => { void revision.value; return DOMPurify.sanitize(marked.parse(connection.value?.scratchpad.toString() || '')) })
 const estimate = computed(() => Math.max(1, Math.ceil(blocks.value.filter(b => !['title', 'note', 'boneyard', 'section', 'synopsis'].includes(b.type)).reduce((n, b) => n + Math.max(1, b.text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / (['dialogue', 'parenthetical'].includes(b.type) ? 35 : 60))), 0)), 0) / 55)))
 function notify(message) { error.value = message; clearTimeout(errorTimer); errorTimer = setTimeout(() => error.value = '', 9000) }
+function openSettings() {
+  draftAlignment.value = alignment.value
+  settingsError.value = ''
+  settingsDialog.value.showModal()
+}
+async function saveSettings() {
+  savingPreferences.value = true
+  settingsError.value = ''
+  try {
+    const titlePageAlignment = draftAlignment.value
+    if (session.value.user.account) {
+      session.value.preferences = await api('/api/preferences', { method: 'PATCH', body: { titlePageAlignment } })
+    } else {
+      localStorage.setItem(alignmentStorageKey, titlePageAlignment)
+      localAlignment.value = titlePageAlignment
+    }
+    settingsDialog.value.close()
+  } catch (e) { settingsError.value = e.message }
+  finally { savingPreferences.value = false }
+}
 function signInURL() { const id = new URL(location.href).searchParams.get('document'); return `/auth/login?returnTo=${encodeURIComponent(id ? '/?document=' + id : '/')}` }
 async function refreshDocuments() { documents.value = await api('/api/documents') }
 async function initialize() {
@@ -441,6 +473,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
   </div>
   <div v-else
     :class="['workspace', { 'is-mobile': mobile, 'keyboard-open': keyboardOpen, 'mobile-preview': mobile && mobilePane === 'preview', 'mobile-writing': mobile && mobilePane === 'write' }]"
+    :style="{ '--title-page-alignment': alignment }"
     :inert="appUpdating">
     <header class="topbar">
       <div class="document-controls">
@@ -505,7 +538,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
           </button>
           <div v-if="exportOpen" class="dropdown export-dropdown"><button @click="exportFountain">
               <FileText :size="15" />Fountain (.fountain)
-            </button><a :href="`/api/documents/${currentId}/export.pdf`" target="_blank" rel="noopener"
+            </button><a :href="pdfURL" target="_blank" rel="noopener"
               @click="exportOpen = false">
               <Download :size="15" />Screenplay PDF
             </a></div>
@@ -567,6 +600,8 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
               tab.label }}</span><span v-if="tab.id === 'review' && activeComments" class="rail-dot" />
           </button>
           <div class="rail-spacer" />
+          <button v-if="!mobile" class="rail-button" title="Settings" aria-label="Settings"
+            :disabled="savingPreferences" @click="openSettings"><Settings :size="18" /></button>
           <button v-if="!mobile" class="rail-button" aria-label="Appearance" title="Appearance" @click="appearance.open()">
             <Palette :size="18" />
           </button>
@@ -644,6 +679,9 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
                 Fountain</button></div>
           </div>
           <div class="mobile-extra-actions">
+            <button class="text-button" :disabled="savingPreferences" @click="openSettings">
+              <Settings :size="16" />Settings
+            </button>
             <button v-if="canEdit" class="text-button" @click="reviewMode = !reviewMode">
               <Pencil :size="16" />{{ reviewMode ? 'Switch to editing' : 'Suggest edits' }}
             </button>
@@ -749,6 +787,22 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
         class="status-separator">·</span><span>Ln {{ cursor.line }}, Col {{ cursor.column }}</span>
     </footer>
     <input ref="importInput" type="file" accept=".fountain,.txt,text/plain" hidden @change="importFile" />
+    <dialog ref="settingsDialog" class="modal settings-dialog" aria-labelledby="settings-title" @keydown.stop>
+      <form @submit.prevent="saveSettings">
+        <h2 id="settings-title">Settings</h2>
+        <label class="field-label">Title page alignment
+          <select v-model="draftAlignment" :disabled="savingPreferences" autofocus>
+            <option v-for="option in TITLE_PAGE_ALIGNMENTS" :key="option" :value="option">{{ option[0].toUpperCase() + option.slice(1) }}</option>
+          </select>
+        </label>
+        <p>Applies to the rendered title page and PDF, without changing the Fountain source.</p>
+        <p v-if="settingsError" class="error-text" role="alert">{{ settingsError }}</p>
+        <footer>
+          <button type="button" class="text-button" @click="settingsDialog.close()">Cancel</button>
+          <button type="submit" class="primary-button" :disabled="savingPreferences">Save settings</button>
+        </footer>
+      </form>
+    </dialog>
   </div>
   <div v-if="error && session?.user" class="toast" role="status"><span>{{ error }}</span><button
       class="icon-button compact" aria-label="Dismiss notification" @click="error = ''">

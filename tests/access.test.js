@@ -73,6 +73,27 @@ async function fixture(t, options = {}) {
   }
 }
 const document = { title: 'Private', text: 'INT. ROOM - DAY\n\nMARA\nHello.\n' }
+
+test('title page alignment is validated and stored per account across sessions and restarts', async t => {
+  const workspace = await fixture(t)
+  const alice = workspace.register('alice@example.test')
+  const bob = workspace.register('bob@example.test')
+  const anonymous = workspace.client()
+  const preferences = '/api/preferences'
+  assert.deepEqual((await alice.json('/api/session')).preferences, { titlePageAlignment: 'center' })
+  assert.equal((await anonymous.call(preferences, 'PATCH', { titlePageAlignment: 'left' })).status, 401)
+  for (const alignment of [undefined, 'justify', ['left'], null]) {
+    assert.equal((await alice.call(preferences, 'PATCH', { titlePageAlignment: alignment })).status, 400)
+  }
+  assert.deepEqual(await alice.json(preferences, 'PATCH', { titlePageAlignment: 'left', accountId: bob.user.id }), { titlePageAlignment: 'left' })
+  assert.deepEqual((await bob.json('/api/session')).preferences, { titlePageAlignment: 'center' })
+  await workspace.restart()
+  const secondSession = workspace.register('alice@example.test')
+  assert.notEqual(secondSession.cookie, alice.cookie)
+  assert.deepEqual((await secondSession.json('/api/session')).preferences, { titlePageAlignment: 'left' })
+  await secondSession.json(preferences, 'PATCH', { titlePageAlignment: 'right' })
+  assert.deepEqual((await alice.json('/api/session')).preferences, { titlePageAlignment: 'right' })
+})
 const grant = (email, role = 'viewer', flags = {}) => ({ kind: 'user', email, role, canInvite: false, canExport: false, ...flags })
 
 test('link guests can save a name without changing identity, expiry, access or other guests', async t => {
