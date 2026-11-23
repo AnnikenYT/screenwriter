@@ -134,10 +134,21 @@ export function screenplayEmphasis(text) {
   return ranges
 }
 
+// Stacking the Bold and Underline commands wraps the same text in either order.
+// Only fold the inner markers in when they enclose the entire outer span.
+export function boldUnderlineInnerWidth(delimiter, content) {
+  const inner = delimiter === '_' ? content.match(/^\*\*(?!\*)(?=\S)(.+?\S|\S)(?<!\\)\*\*/)
+    : delimiter === '**' ? content.match(/^_(?=\S)([^_\n]*?\S|[^_\s])(?<!\\)_/) : null
+  return inner?.[0] === content ? (delimiter === '_' ? 2 : 1) : 0
+}
+
 export function plainText(text) {
   const escaped = []
   const protectedText = text.replace(/\\([\\*_])/g, (_, c) => `\u0000${escaped.push(c) - 1}\u0000`)
-  return protectedText.replace(/(\*{1,3}|_)(?=\S)(.+?)\1/g, '$2').replace(/\u0000(\d+)\u0000/g, (_, n) => escaped[Number(n)])
+  return protectedText.replace(/(\*{1,3}|_)(?=\S)(.+?)\1/g, (_, delimiter, content) => {
+    const innerWidth = boldUnderlineInnerWidth(delimiter, content)
+    return innerWidth ? content.slice(innerWidth, -innerWidth) : content
+  }).replace(/\u0000(\d+)\u0000/g, (_, n) => escaped[Number(n)])
 }
 
 export function titleFields(text) {

@@ -2,6 +2,41 @@ import { test, expect } from '@playwright/test'
 
 const source = "INT. ROOM - NOON\n\nMARA (V.O.) (CONT'D)\nHello.\n\nSHOT: A close-up.\nVFX: Sparks.\nSFX: Thunder.\n\nELI (O.S.)\nWait.\n"
 
+for (const [first, second, markup] of [
+  ['Bold', 'Underline', '**_A door opens._**'],
+  ['Underline', 'Bold', '_**A door opens.**_'],
+]) {
+  test(`${first} then ${second} renders both styles in live and split views`, async ({ page, request }) => {
+    const text = 'A door opens.'
+    const { id } = await (await request.post('/api/documents', { data: { title: 'Combined emphasis', text: `${text}\n\nA bell rings.` } })).json()
+    await page.goto(`/?document=${id}`)
+    const editor = page.getByRole('textbox', { name: 'Screenplay editor' })
+    await expect(editor).toBeVisible()
+    await editor.focus()
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('Shift+End')
+    await page.getByRole('button', { name: first, exact: true }).click()
+    await page.getByRole('button', { name: second, exact: true }).click()
+
+    const line = editor.locator('.ft-action').first()
+    const combined = line.locator('.emphasis-bold.emphasis-underline')
+    await expect(line).toHaveText(markup)
+    await expect(combined).toHaveText(text)
+    await page.keyboard.press('Control+End')
+    await expect(line).toHaveClass(/ft-rendered/)
+    await expect(line).toHaveText(text)
+    await expect(combined).toHaveCSS('font-weight', '700')
+    await expect(combined).toHaveCSS('text-decoration-line', 'underline')
+
+    await page.getByRole('button', { name: 'Split', exact: true }).click()
+    await expect(page.locator('.paper .action').first()).toHaveText(text)
+    const underlined = page.locator('.paper .action u')
+    await expect(underlined).toHaveText(text)
+    await expect(underlined).toHaveCSS('text-decoration-line', 'underline')
+    await expect(page.locator('.paper .action strong')).toHaveCSS('font-weight', '700')
+  })
+}
+
 test('uppercase character and location mentions are bold outside dialogue in both views', async ({ page, request }) => {
   const text = 'INT. GREAT HALL - DAY\n\nMARA walks through GREAT HALL. Mara hears an ALARM near MARATHON.\n\nMARA\nHello.\n'
   const { id } = await (await request.post('/api/documents', { data: { title: 'Name mentions', text } })).json()

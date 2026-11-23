@@ -76,3 +76,10 @@ test('safe inline emphasis and escaping', () => {
   assert.equal(plainText('\\*not italic\\* **bold**'), '*not italic* bold')
   assert.equal(inlineFountain('*one\n\ntwo*'), '*one\n\ntwo*')
 })
+
+test('bold and underline work in either order without exposing markup', () => {
+  assert.equal(inlineFountain('_**🎬 & <cut>**_'), '<u><strong>🎬 &amp; &lt;cut&gt;</strong></u>')
+  assert.equal(inlineFountain('**_🎬 & <cut>_**'), '<strong><u>🎬 &amp; &lt;cut&gt;</u></strong>')
+  assert.equal(plainText('_**First**_ **_Second_**'), 'First Second')
+  assert.equal(plainText('_\\*\\*literal\\*\\*_'), '**literal**')
+})

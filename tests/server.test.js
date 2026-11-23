@@ -682,7 +682,7 @@ BOB ^
 Right dialogue.
 
 
-!An *important* and _underlined_ action.
+!An *important* and _underlined_ action with _**one**_ and **_two_**.
 
 ===
 
@@ -713,6 +713,9 @@ ${'A long right dialogue. '.repeat(300)}
   assert.equal(action.y, left.y + 36, 'two intentional blank lines are preserved');
   assert.ok(calls.some(call => call.text === 'important' && call.font === 'Courier-Oblique'));
   assert.ok(calls.some(call => call.text === 'underlined' && call.underline));
+  for (const text of ['one', 'two']) {
+    assert.ok(calls.some(call => call.text === text && call.font === 'Courier-Bold' && call.underline));
+  }
   assert.equal(calls.find(call => call.text === 'Next page.').page, 2);
   assert.ok(count > 3);
   for (const call of calls.filter(call => call.y >= 54)) assert.ok(call.y + 12 <= 738, 'body stays inside page margins');

@@ -1,6 +1,6 @@
 import { StateField } from '@codemirror/state'
 import { Decoration, ViewPlugin, WidgetType, EditorView } from '@codemirror/view'
-import { parseFountain, inlineFountain, screenplayEmphasis, createNameMatcher } from '../../shared/fountain.js'
+import { parseFountain, inlineFountain, screenplayEmphasis, createNameMatcher, boldUnderlineInnerWidth } from '../../shared/fountain.js'
 
 export const parsedFountain = StateField.define({
   create: state => parseFountain(state.doc.toString()),
@@ -29,9 +29,10 @@ function markup(line, from, raw, ranges, type, names) {
     }
   }
   for (const match of line.matchAll(expression)) {
-    const length = match[1].length
+    const innerWidth = boldUnderlineInnerWidth(match[1], match[2])
+    const length = match[1].length + innerWidth
     if (!raw) { add(match.index, match.index + length); add(match.index + match[0].length - length, match.index + match[0].length) }
-    add(match.index + length, match.index + match[0].length - length, { class: match[1] === '_' ? 'emphasis-underline' : length === 3 ? 'emphasis-bold emphasis-italic' : length === 2 ? 'emphasis-bold' : 'emphasis-italic' })
+    add(match.index + length, match.index + match[0].length - length, { class: innerWidth ? 'emphasis-bold emphasis-underline' : match[1] === '_' ? 'emphasis-underline' : length === 3 ? 'emphasis-bold emphasis-italic' : length === 2 ? 'emphasis-bold' : 'emphasis-italic' })
   }
 }
 
