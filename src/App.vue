@@ -1,10 +1,11 @@
 <script setup>
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount, nextTick, markRaw, watch } from 'vue'
-import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Palette, Keyboard, CircleArrowDown, RefreshCw } from 'lucide-vue-next'
+import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, ChartNoAxesColumn, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Palette, Keyboard, CircleArrowDown, RefreshCw } from 'lucide-vue-next'
 import AppearanceDialog from './components/AppearanceDialog.vue'
 import TextEditor from './components/TextEditor.vue'
 import ScreenplayPreview from './components/ScreenplayPreview.vue'
 import SheetPanel from './components/SheetPanel.vue'
+import StatsPanel from './components/StatsPanel.vue'
 import ReviewPanel from './components/ReviewPanel.vue'
 import VersionPanel from './components/VersionPanel.vue'
 import InlineComments from './components/InlineComments.vue'
@@ -94,6 +95,7 @@ const tabs = [
   { id: 'outline', label: 'Outline', icon: List },
   { id: 'characters', label: 'Characters', icon: UsersRound },
   { id: 'locations', label: 'Locations', icon: MapPin },
+  { id: 'stats', label: 'Stats', icon: ChartNoAxesColumn },
   { id: 'review', label: 'Review', icon: MessageSquare },
   { id: 'scratchpad', label: 'Scratchpad', icon: NotebookPen },
   { id: 'versions', label: 'Versions', icon: History },
@@ -619,6 +621,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
           <SheetPanel v-else-if="['characters', 'locations'].includes(panel)" :key="currentId + panel" v-model:sort="characterSort"
             :doc="connection.doc" :document-id="currentId" :kind="panel" :revision="revision" :blocks="blocks"
             @error="notify" @jump="goTo" />
+          <StatsPanel v-else-if="panel === 'stats'" :key="currentId" :blocks="blocks" @jump="goTo" />
           <ReviewPanel v-else-if="panel === 'review'" ref="review" :key="currentId" :doc="connection.doc"
             :document-id="currentId" :revision="revision" :selection="selection" :user="session.user" @error="notify"
             @jump="goTo" />
