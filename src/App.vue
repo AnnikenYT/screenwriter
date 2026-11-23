@@ -1,6 +1,7 @@
 <script setup>
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount, nextTick, markRaw, watch } from 'vue'
-import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Moon, Sun, Keyboard, CircleArrowDown, RefreshCw } from 'lucide-vue-next'
+import { PanelLeftClose, PanelLeftOpen, List, UsersRound, MapPin, MessageSquare, NotebookPen, History, FileText, Plus, Upload, Download, ChevronDown, Columns2, AlignLeft, Pencil, Check, X, Undo2, Redo2, CircleHelp, Link, LogOut, LoaderCircle, Bold, Italic, Underline, ImagePlus, Palette, Keyboard, CircleArrowDown, RefreshCw } from 'lucide-vue-next'
+import AppearanceDialog from './components/AppearanceDialog.vue'
 import TextEditor from './components/TextEditor.vue'
 import ScreenplayPreview from './components/ScreenplayPreview.vue'
 import SheetPanel from './components/SheetPanel.vue'
@@ -28,12 +29,7 @@ const namePicker = ref(null)
 const installHelpOpen = ref(false)
 const updateHelpOpen = ref(false)
 const appUpdating = ref(false)
-const theme = ref(localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))
-watch(theme, value => {
-  document.documentElement.dataset.theme = value
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', value === 'dark' ? '#20261d' : '#f6f5f2')
-  localStorage.setItem('theme', value)
-}, { immediate: true })
+const appearance = ref(null)
 const loading = ref(true)
 const error = ref('')
 const documents = ref([])
@@ -389,6 +385,7 @@ function workspaceError(event) { notify(event.detail) }
 function closeMenus(event) { if (!event.target.closest('.dropdown-anchor')) { filesOpen.value = false; exportOpen.value = false } }
 function beforeUnload(event) { if (dirtyOffline.value) { event.preventDefault(); event.returnValue = '' } }
 function hotkeys(event) {
+  if (appearance.value?.isOpen()) return
   if (event.key === 'Escape') { helpOpen.value = false; filesOpen.value = false; exportOpen.value = false; profileOpen.value = false; imageLinkOpen.value = false; namePicker.value = null; installHelpOpen.value = false; updateHelpOpen.value = false; if (mobile.value && sidebar.value) closeTools() }
   if (event.key === 'Tab' && mobile.value && sidebar.value && !profileOpen.value && !imageLinkOpen.value && !helpOpen.value && !installHelpOpen.value && !updateHelpOpen.value) {
     const tools = document.querySelector('.mobile-tools-open')
@@ -565,11 +562,8 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
               tab.label }}</span><span v-if="tab.id === 'review' && activeComments" class="rail-dot" />
           </button>
           <div class="rail-spacer" />
-          <button v-if="!mobile" class="rail-button"
-            :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
-            :title="theme === 'dark' ? 'Light mode' : 'Dark mode'" @click="theme = theme === 'dark' ? 'light' : 'dark'">
-            <Sun v-if="theme === 'dark'" :size="18" />
-            <Moon v-else :size="18" />
+          <button v-if="!mobile" class="rail-button" aria-label="Appearance" title="Appearance" @click="appearance.open()">
+            <Palette :size="18" />
           </button>
           <button v-if="!mobile" class="rail-button" title="Fountain reference" aria-label="Fountain reference"
             @click="helpOpen = true">
@@ -641,10 +635,8 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
             </button>
             <button v-if="session.authMode === 'oauth' && synced" class="text-button"
               @click="shareOpen = true">Share</button>
-            <button class="text-button" :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
-              @click="theme = theme === 'dark' ? 'light' : 'dark'">
-              <Sun v-if="theme === 'dark'" :size="16" />
-              <Moon v-else :size="16" />{{ theme === 'dark' ? 'Light' : 'Dark' }}
+            <button class="text-button" @click="appearance.open()">
+              <Palette :size="16" />Appearance
             </button>
             <button class="text-button" @click="helpOpen = true">
               <CircleHelp :size="16" />Syntax
@@ -748,6 +740,7 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       class="icon-button compact" aria-label="Dismiss notification" @click="error = ''">
       <X :size="14" />
     </button></div>
+  <AppearanceDialog ref="appearance" />
   <Teleport to="body">
     <div v-if="appUpdating" class="modal-backdrop" role="alert" aria-live="polite">
       <div class="modal app-update-progress">

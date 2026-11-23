@@ -7,7 +7,9 @@ test('favicon and offline artwork follow browser contrast even when app theme di
   await page.goto('/')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   expect(await activeIcons()).toEqual(['/icons/icon-nobg-dark.png'])
-  await page.getByRole('button', { name: 'Switch to light mode', exact: true }).click()
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+  await page.getByLabel('Brightness').selectOption('light')
+  await page.getByRole('button', { name: 'Close appearance' }).click()
   // Changing a page's theme does not change the browser tab's background.
   expect(await activeIcons()).toEqual(['/icons/icon-nobg-dark.png'])
   await page.reload()
