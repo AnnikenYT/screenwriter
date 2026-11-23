@@ -162,7 +162,7 @@ test('manifest, Apple metadata, maskable PNG dimensions and offline landing are 
 })
 
 test('build plugin hashes content and excludes index, API-looking and unrelated files', async () => {
-  const root = await mkdtemp('/tmp/opencode/screenplay-pwa-build-')
+  const root = await mkdtemp('/tmp/screenwriter/screenplay-pwa-build-')
   try {
     const output = path.join(root, 'dist')
     await mkdir(path.join(output, 'assets'), { recursive: true })
@@ -194,7 +194,7 @@ test('backend worker, manifest, shell and private response headers remain safe',
   // Build output is required for the production static routes.
   try { await readFile(new URL('../dist/sw.js', import.meta.url)) }
   catch { t.skip('Run npm run build to check production response headers'); return }
-  const directory = await mkdtemp('/tmp/opencode/screenplay-pwa-server-')
+  const directory = await mkdtemp('/tmp/screenwriter/screenplay-pwa-server-')
   const server = createWorkspace({ DATA_DIR: directory, AUTH_MODE: 'none' })
   try {
     await new Promise(resolve => server.server.listen(0, '127.0.0.1', resolve))

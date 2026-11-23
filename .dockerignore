@@ -15,3 +15,4 @@ coverage
 # README artwork and the unused design source aren't app assets.
 public/icons/banner-*.png
 public/icons/icon.svg
+dev/

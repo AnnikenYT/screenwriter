@@ -4,6 +4,7 @@ import { MessageSquarePlus, MessageSquare, X } from 'lucide-vue-next'
 import CommentThread from './CommentThread.vue'
 import { relativeAnchor } from '../lib/collaboration.js'
 import { viewportBounds } from '../lib/mobile.js'
+import { reviewWrite } from '../lib/review-api.js'
 
 const props = defineProps({ doc: Object, geometry: Object, revision: Number, selection: Object, user: Object })
 const emit = defineEmits(['jump', 'jump-annotation'])
@@ -37,6 +38,9 @@ function positionFloating(top = bubbleTop.value) {
   }
 }
 async function open() {
+  if (props.doc.access?.canReview === false) return
+  await props.doc.flushReview?.()
+  await nextTick()
   const selection = props.selection || { from: 0, to: 0, text: '' }
   composer.value = { quote: selection.text, anchor: relativeAnchor(props.doc, selection.from, selection.to), proposal: selection.proposal, top: bubbleTop.value }
   selectedId.value = null
@@ -44,10 +48,10 @@ async function open() {
   await nextTick()
   textarea.value?.focus()
 }
-function submit() {
+async function submit() {
   if (!draft.value.trim() || !composer.value) return
-  const id = crypto.randomUUID()
-  props.doc.getMap('comments').set(id, { id, parentId: null, text: draft.value.trim(), quote: composer.value.quote, anchor: composer.value.anchor, ...(composer.value.proposal ? { proposal: composer.value.proposal } : {}), author: props.user.name, authorId: props.user.id, createdAt: Date.now(), resolved: false })
+  const id = await reviewWrite(props.doc, 'comments', { id: crypto.randomUUID(), parentId: null, text: draft.value.trim(), quote: composer.value.quote, anchor: composer.value.anchor, ...(composer.value.proposal ? { proposal: composer.value.proposal } : {}), author: props.user.name, authorId: props.user.id, createdAt: Date.now(), resolved: false })
+  if (!id) return
   composer.value = null
   draft.value = ''
   selectedId.value = id
@@ -71,7 +75,7 @@ defineExpose({ open, reveal(id) { const comment = comments.value.find(c => c.id 
 
 <template>
   <aside ref="host" :class="['inline-comments', { expanded }]" aria-label="Line comments">
-    <button v-if="geometry?.cursor && (geometry.focused || composer || selection?.text)" class="line-comment-add icon-button" :style="{ top: `${bubbleTop}px` }" title="Comment on this line or selection" aria-label="Comment on this line" @mousedown.prevent @click="open"><MessageSquarePlus :size="18" /></button>
+    <button v-if="doc.access?.canReview !== false && geometry?.cursor && (geometry.focused || composer || selection?.text)" class="line-comment-add icon-button" :style="{ top: `${bubbleTop}px` }" title="Comment on this line or selection" aria-label="Comment on this line" @mousedown.prevent @click="open"><MessageSquarePlus :size="18" /></button>
     <template v-for="item in visibleComments" :key="item.comment.id">
       <div v-if="expanded" class="positioned-comment" :style="{ top: `${item.top}px` }"><CommentThread :doc="doc" :comment="item.comment" :revision="revision" :user="user" @jump="jump" /></div>
       <button v-else class="line-comment-marker icon-button" :style="{ top: `${item.top}px` }" :aria-label="`Open comment by ${item.comment.author}: ${item.comment.text}`" @click="show(item.comment, item.top)"><MessageSquare :size="16" /></button>

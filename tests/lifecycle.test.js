@@ -44,7 +44,7 @@ test('sheet archive, restore and deletion preserve source and suppress discovery
 })
 
 test('document lifecycle migrates old databases, stops sockets, persists archives and deletes owned data', async () => {
-  const directory = await mkdtemp('/tmp/opencode/screenwriter-lifecycle-')
+  const directory = await mkdtemp('/tmp/screenwriter/screenwriter-lifecycle-')
   const db = new DatabaseSync(`${directory}/workspace.sqlite`)
   db.exec('CREATE TABLE documents(id TEXT PRIMARY KEY,title TEXT NOT NULL,state BLOB NOT NULL,updated_at INTEGER NOT NULL)')
   db.close()

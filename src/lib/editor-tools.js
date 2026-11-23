@@ -5,6 +5,7 @@ import { characterName, locationName, parseFountain } from '../../shared/fountai
 import { parsedFountain } from './fountain-editor.js'
 
 export function wrapSelection(view, delimiter, { toggle = false, closing = delimiter } = {}) {
+  if (view.state.readOnly) return false
   const changes = view.state.changeByRange(range => {
     const selected = view.state.sliceDoc(range.from, range.to)
     const starActive = depth => delimiter === '*' ? depth % 2 === 1 : depth >= 2
@@ -120,6 +121,7 @@ export function screenplayCompletions(doc, state, position) {
 }
 
 export function completeName(view, doc) {
+  if (view.state.readOnly) return false
   if (acceptCompletion(view)) { view.focus(); return true }
   const result = screenplayCompletions(doc, view.state, view.state.selection.main.head)
   if (!result) return false
@@ -131,6 +133,7 @@ export function completeName(view, doc) {
 }
 
 export function insertScreenplayName(view, name, kind) {
+  if (view.state.readOnly) return false
   const line = view.state.doc.lineAt(view.state.selection.main.head)
   const location = kind === 'locations'
   const heading = line.text.match(/^((?:INT\.?\/EXT\.?|INT\/EXT\.?|INT\.?|EXT\.?|EST\.?|I\/E\.?)\s+)(.*?)(\s+-\s+.*)?$/i)
@@ -162,6 +165,7 @@ export function insertScreenplayName(view, name, kind) {
 }
 
 export function insertParenthetical(view) {
+  if (view.state.readOnly) return false
   const range = view.state.selection.main
   if (!range.empty) return wrapSelection(view, '(', { closing: ')' })
   const line = view.state.doc.lineAt(range.head)

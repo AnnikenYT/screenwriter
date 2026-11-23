@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "concurrently -k \"node --watch server/index.js\" \"vite --host 0.0.0.0\"",
+    "dev:oauth": "node --watch dev/oauth.js",
     "build": "vite build",
     "icons": "node build/icons.js",
     "start": "node server/index.js",
@@ -31,6 +32,7 @@
     "lucide-vue-next": "^0.468.0",
     "marked": "^15.0.12",
     "multer": "^2.0.2",
+    "nodemailer": "^10.6.0",
     "pdfkit": "^0.17.1",
     "vue": "^3.5.13",
     "ws": "^8.18.1",

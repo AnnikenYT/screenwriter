@@ -36,6 +36,43 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .lifecycle-actions button { min-height: 44px; }
 .danger-button { color: #b44b44 !important; }
 .document-manager { width: 540px; }
+.modal.share-dialog { width: 540px; max-width: 100%; }
+.share-dialog select { width: 100%; min-height: 36px; background: var(--paper); color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.share-dialog header h2 { overflow-wrap: anywhere; line-height: 1.4; }
+.share-invite > input { width: 100%; min-height: 46px; margin: 4px 0 8px; }
+.share-invite-options, .share-link-options { padding: 0 12px 12px; background: var(--accent-light); border-radius: 6px; }
+.share-section { margin-top: 22px; }
+.share-section h3 { margin: 0 0 12px; font-size: 14px; font-weight: 550; }
+.share-person { display: flex; align-items: center; gap: 12px; padding: 8px 0; min-width: 0; }
+.share-person-avatar, .share-access-icon { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center; background: var(--accent-light); color: var(--accent); font-weight: 550; }
+.share-person-identity { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.share-person-identity strong { font-size: 12px; font-weight: 500; }
+.share-person-identity > span, .share-person-identity small { font-size: 11px; color: var(--muted); }
+.share-owner-role { font-size: 12px; color: var(--muted); padding: 10px 5px; }
+.share-role-name, .share-role-button > span { text-transform: capitalize; }
+.share-permissions { position: relative; flex-shrink: 0; }
+.share-role-button { display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 5px; font-size: 12px; border-radius: 5px; }
+.share-role-button:hover { background: var(--accent-light); }
+.share-permission-menu { position: absolute; right: 0; top: 100%; width: 228px; max-width: calc(100vw - 60px); z-index: 3; padding: 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 8px 25px #17231425; }
+.share-permission-menu button { display: flex; align-items: center; gap: 10px; min-height: 40px; width: 100%; padding: 8px 12px; border-radius: 4px; text-align: left; font-size: 12px; }
+.share-permission-menu button:hover { background: var(--accent-light); }
+.share-permission-menu button[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.share-permission-menu [role="menuitemcheckbox"] { justify-content: space-between; }
+.share-menu-divider { border-top: 1px solid var(--line); margin: 5px -6px; }
+.share-toggle { width: 28px; height: 16px; padding: 2px; background: var(--line); border-radius: 10px; flex-shrink: 0; }
+.share-toggle > span { display: block; width: 12px; height: 12px; background: var(--paper); border: 1px solid var(--muted); border-radius: 50%; }
+.share-toggle.checked { background: var(--accent); }
+.share-toggle.checked > span { transform: translateX(12px); }
+.share-general { padding-top: 20px; border-top: 1px solid var(--line); }
+.share-dialog .share-footer { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 22px; }
+.share-footer .share-copy-button { margin-right: auto; color: var(--accent); min-height: 44px; }
+.share-footer .primary-button { min-width: 78px; min-height: 40px; }
+.share-link { margin-top: 14px; }
+@media (max-width: 760px) {
+  .share-permission-menu button { min-height: 44px; }
+  .share-person { gap: 9px; }
+  .share-dialog .share-footer { gap: 8px; }
+}
 .document-management-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .document-management-row strong { overflow-wrap: anywhere; font-weight: 500; }
 .room-unavailable { padding: 10px 14px; background: var(--accent-light); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; }
