@@ -1,0 +1,23 @@
+import { test, expect } from '@playwright/test'
+
+test('long scripts keep a draggable and keyboard-accessible scrollbar at both endpoints', async ({ page, request }) => {
+  const text = Array.from({ length: 450 }, (_, i) => `Paragraph ${i + 1}. This is part of the long screenplay.`).join('\n\n')
+  const { id } = await (await request.post('/api/documents', { data: { title: 'Long script', text } })).json()
+  await page.goto(`/?document=${id}`)
+  const rail = page.getByRole('scrollbar', { name: 'Screenplay scroll position' })
+  const scroller = page.locator('.live-editor .cm-scroller')
+  const thumb = rail.locator('span')
+  await expect(thumb).toHaveCSS('height', '44px')
+  await expect(scroller).toHaveCSS('scrollbar-width', 'none')
+  const track = await rail.boundingBox()
+  const box = await thumb.boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, track.y + track.height - 1, { steps: 10 })
+  await page.mouse.up()
+  await expect.poll(() => scroller.evaluate(el => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop))).toBeLessThanOrEqual(1)
+  await rail.press('Home')
+  await expect(rail).toHaveAttribute('aria-valuenow', '0')
+  await rail.press('PageDown')
+  await expect.poll(async () => Number(await rail.getAttribute('aria-valuenow'))).toBeGreaterThan(0)
+})

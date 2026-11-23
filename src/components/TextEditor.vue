@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { EditorState, Compartment } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, placeholder, drawSelection } from '@codemirror/view'
 import { defaultKeymap, indentWithTab } from '@codemirror/commands'
@@ -12,6 +12,7 @@ import { fountainFormatting } from '../lib/fountain-editor.js'
 import { createScreenplayBinding } from '../lib/screenplay-binding.js'
 import { screenplayTools, wrapSelection, completeName, insertScreenplayName, insertParenthetical } from '../lib/editor-tools.js'
 import { viewportBounds } from '../lib/mobile.js'
+import { useEditorScrollbar } from '../lib/editor-scrollbar.js'
 
 const props = defineProps({
   ytext: { type: Object, required: true },
@@ -30,6 +31,9 @@ const hoverStyle = ref({})
 const unsavedReview = ref(null)
 let view, undo, binding, resizeObserver, hoverTimer
 const presentation = new Compartment()
+const scrollbar = useEditorScrollbar()
+const { rail, metrics: scrollbarMetrics } = scrollbar
+const contentId = `editor-${useId()}`
 
 function extensions() {
   return props.markdown ? [markdownLanguage(), lineNumbers()] : [
@@ -61,6 +65,11 @@ function unlinkImage() { props.ytext.doc.getMap('meta').delete(`image-link:${hov
 function measure() {
   if (!view || props.markdown) return
   view.requestMeasure({
+    key: scrollbar,
+    read: editor => scrollbar.read(editor.scrollDOM),
+    write: (metrics, editor) => scrollbar.update(editor.scrollDOM, metrics),
+  })
+  view.requestMeasure({
     key: host,
     read(editor) {
       const bounds = host.value.getBoundingClientRect()
@@ -86,6 +95,7 @@ function measure() {
   })
 }
 function onScroll() {
+  if (view && !props.markdown) scrollbar.update(view.scrollDOM)
   measure()
   if (!view || props.markdown) return
   const bounds = view.scrollDOM.getBoundingClientRect()
@@ -141,7 +151,7 @@ onMounted(() => {
           }
           measure()
         }),
-        EditorView.contentAttributes.of({ 'aria-label': props.markdown ? 'Shared scratchpad' : 'Screenplay editor', spellcheck: 'true', autocapitalize: 'off' }),
+        EditorView.contentAttributes.of({ id: contentId, 'aria-label': props.markdown ? 'Shared scratchpad' : 'Screenplay editor', spellcheck: 'true', autocapitalize: 'off' }),
         EditorView.domEventHandlers({ blur: () => { measure(); return false }, focus: () => { measure(); return false }, mouseleave: () => { hideHover(); return false } }),
       ],
     }),
@@ -195,7 +205,16 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="host" :class="['text-editor', { 'live-editor': mode === 'live' && !markdown, 'raw-editor': mode === 'split', 'markdown-editor': markdown }]" />
+  <div :class="['editor-frame', { 'long-editor': scrollbarMetrics }]">
+    <div ref="host" :class="['text-editor', { 'live-editor': mode === 'live' && !markdown, 'raw-editor': mode === 'split', 'markdown-editor': markdown }]" />
+    <div v-if="scrollbarMetrics" ref="rail" class="editor-scrollbar" role="scrollbar" tabindex="0"
+      aria-label="Screenplay scroll position" :aria-controls="contentId" aria-orientation="vertical"
+      :aria-valuemin="0" :aria-valuemax="Math.round(scrollbarMetrics.max)" :aria-valuenow="Math.round(scrollbarMetrics.value)"
+      @pointerdown.prevent="scrollbar.start" @pointermove="scrollbar.move" @lostpointercapture="scrollbar.stop"
+      @keydown="scrollbar.key">
+      <span :style="{ transform: `translateY(${scrollbarMetrics.offset}px)` }" />
+    </div>
+  </div>
   <Teleport to="body">
     <div v-if="unsavedReview !== null" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-label="Unsaved suggestion"><header><h2>Suggestion not saved</h2><button class="icon-button" aria-label="Close unsaved suggestion" @click="unsavedReview = null"><X :size="18" /></button></header><p>Copy your proposed text before closing.</p><textarea :value="unsavedReview" readonly rows="10" aria-label="Unsaved proposed text" @focus="$event.target.select()" /></section></div>
     <section v-if="hovered" class="inline-suggestion-popover" :style="hoverStyle" role="dialog" :aria-label="`Suggestion by ${hovered.author}`" @mouseenter="keepHover" @mouseleave="hideHover" @keydown.esc="hovered = null">
