@@ -181,7 +181,9 @@ button, input, textarea { transition: background-color .12s, border-color .12s; 
 .live-editor .ft-lyric.ft-rendered { font-style: italic; }
 .live-editor .ft-title.ft-rendered { text-align: center; }
 .text-editor .ft-section { color: #a18c60; font-weight: 600; font-family: inherit; }
-.live-editor .ft-section.ft-rendered { font-family: Inter, sans-serif; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #aaa893; border-bottom: 1px solid #eeeede; margin-bottom: 12px; padding-bottom: 6px; }
+/* CodeMirror measures line boxes, not margins. Keep the heading height stable while editing. */
+.live-editor .ft-section.cm-line { font-family: Inter, sans-serif; font-size: 10px; letter-spacing: 1px; padding-bottom: 18px; border-bottom: 1px solid transparent; }
+.live-editor .ft-section.ft-rendered { text-transform: uppercase; color: #aaa893; border-color: #eeeede; }
 .text-editor .ft-synopsis { color: #9c9d82; font-style: italic; }
 .text-editor .ft-note, .text-editor .ft-boneyard { color: #b2b09f; font-style: italic; }
 .text-editor .ft-pagebreak { color: #c4c5b5; text-align: center; letter-spacing: 6px; }
