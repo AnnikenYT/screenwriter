@@ -1,6 +1,12 @@
 import { StateField } from '@codemirror/state'
 import { Decoration, ViewPlugin, WidgetType, EditorView } from '@codemirror/view'
 import { parseFountain, inlineFountain, screenplayEmphasis, createNameMatcher, boldUnderlineInnerWidth } from '../../shared/fountain.js'
+import { characterCueName } from './character-colors.js'
+
+function cueStyle(block, colors) {
+  const color = colors.get(characterCueName(block))
+  return color ? `text-decoration: underline 2px ${color}; text-underline-offset: 3px` : ''
+}
 
 export const parsedFountain = StateField.define({
   create: state => parseFountain(state.doc.toString()),
@@ -37,12 +43,12 @@ function markup(line, from, raw, ranges, type, names) {
 }
 
 class DualDialogueWidget extends WidgetType {
-  constructor(left, right, annotations, callbacks, names) { super(); this.left = left; this.right = right; this.annotations = annotations; this.callbacks = callbacks; this.names = names }
-  eq(other) { return this.names.source?.source === other.names.source?.source && JSON.stringify([this.left, this.right, this.annotations]) === JSON.stringify([other.left, other.right, other.annotations]) }
+  constructor(left, right, annotations, callbacks, names, colors) { super(); this.left = left; this.right = right; this.annotations = annotations; this.callbacks = callbacks; this.names = names; this.styles = [cueStyle(left[0], colors), cueStyle(right[0], colors)] }
+  eq(other) { return this.styles.every((style, index) => style === other.styles[index]) && this.names.source?.source === other.names.source?.source && JSON.stringify([this.left, this.right, this.annotations]) === JSON.stringify([other.left, other.right, other.annotations]) }
   toDOM(view) {
     const wrapper = document.createElement('div')
     wrapper.className = 'live-dual-dialogue dual'
-    for (const side of [this.left, this.right]) {
+    for (const [index, side] of [this.left, this.right].entries()) {
       const speech = document.createElement('div')
       speech.className = 'speech'
       for (const block of side) {
@@ -51,6 +57,10 @@ class DualDialogueWidget extends WidgetType {
         line.dataset.sourceFrom = block.from
         line.dataset.sourceTo = block.to
         line.innerHTML = inlineFountain(block.text, this.names)
+        if (block.type === 'character' && this.styles[index]) {
+          line.classList.add('character-cue-color')
+          line.style.cssText = this.styles[index]
+        }
         for (const annotation of this.annotations.filter(a => a.from <= block.to && a.to >= block.from)) {
           if (annotation.type === 'image') {
             line.classList.add('image-linked-passage')
@@ -76,9 +86,10 @@ class DualDialogueWidget extends WidgetType {
   ignoreEvent() { return true }
 }
 
-function dualFormatting(getSuggestions, getAnnotations, callbacks) {
+function dualFormatting(getSuggestions, getAnnotations, callbacks, characterColors) {
   const build = state => {
     const blocks = state.field(parsedFountain)
+    const colors = state.field(characterColors)
     const decorations = []
     for (let i = 0; i < blocks.length; i++) {
       const left = blocks[i]
@@ -99,7 +110,7 @@ function dualFormatting(getSuggestions, getAnnotations, callbacks) {
       })
       const proposed = getSuggestions?.().some(span => span.from <= last.to && span.to >= left.from)
       const annotations = getAnnotations?.().filter(a => a.from <= last.to && a.to >= left.from) || []
-      if (!active && !proposed) decorations.push(Decoration.replace({ widget: new DualDialogueWidget(blocks.slice(i, end), blocks.slice(next, rightEnd), annotations, callbacks, state.field(nameMentions)), block: true }).range(left.from, last.to))
+      if (!active && !proposed) decorations.push(Decoration.replace({ widget: new DualDialogueWidget(blocks.slice(i, end), blocks.slice(next, rightEnd), annotations, callbacks, state.field(nameMentions), colors), block: true }).range(left.from, last.to))
       i = rightEnd - 1
     }
     return Decoration.set(decorations, true)
@@ -111,11 +122,16 @@ function dualFormatting(getSuggestions, getAnnotations, callbacks) {
   })
 }
 
-export function fountainFormatting(live, getSuggestions, getAnnotations, callbacks = {}) {
+export function fountainFormatting(live, getSuggestions, getAnnotations, callbacks = {}, getColors = () => new Map()) {
+  const characterColors = StateField.define({
+    create: state => getColors(state.field(parsedFountain)),
+    update: (colors, tr) => tr.docChanged ? getColors(tr.state.field(parsedFountain)) : colors,
+  })
   return [
     parsedFountain,
     nameMentions,
-    ...(live ? [dualFormatting(getSuggestions, getAnnotations, callbacks)] : []),
+    characterColors,
+    ...(live ? [dualFormatting(getSuggestions, getAnnotations, callbacks, characterColors)] : []),
     ViewPlugin.fromClass(class {
       constructor(view) { this.decorations = this.build(view) }
       update(update) {
@@ -124,6 +140,7 @@ export function fountainFormatting(live, getSuggestions, getAnnotations, callbac
       build(view) {
         const ranges = []
         const blocks = view.state.field(parsedFountain)
+        const colors = view.state.field(characterColors)
         const selections = view.state.selection.ranges.map(r => ({
           from: view.state.doc.lineAt(r.from).number,
           to: view.state.doc.lineAt(r.to).number,
@@ -131,6 +148,7 @@ export function fountainFormatting(live, getSuggestions, getAnnotations, callbac
         }))
         for (const block of blocks) {
           if (!view.visibleRanges.some(r => block.to >= r.from && block.from <= r.to)) continue
+          const style = cueStyle(block, colors)
           const active = live && selections.some(range =>
             (range.from <= block.endLine && range.to >= block.startLine) ||
             (block.group ? range.head >= block.group && range.head <= block.groupEnd + 1
@@ -139,6 +157,7 @@ export function fountainFormatting(live, getSuggestions, getAnnotations, callbac
             const line = view.state.doc.line(n)
             if (!view.visibleRanges.some(r => line.to >= r.from && line.from <= r.to)) continue
             ranges.push(Decoration.line({ class: `ft-${block.type} ${live ? active ? 'ft-active' : 'ft-rendered' : 'ft-source'}` }).range(line.from))
+            if (style && line.to > line.from) ranges.push(Decoration.mark({ class: 'character-cue-color', attributes: { style } }).range(line.from, line.to))
             markup(line.text, line.from, !live || active, ranges, block.type, view.state.field(nameMentions))
           }
         }

@@ -5,6 +5,7 @@ import { marked } from 'marked'
 import { ImagePlus, ArrowLeft, X, MapPin, UserRound } from 'lucide-vue-next'
 import { api } from '../lib/api.js'
 import { renameSheet, readSheet, sheetFieldKey } from '../lib/collaboration.js'
+import { characterColorKey, isCharacterColor, screenplayCharacterColors } from '../lib/character-colors.js'
 import { characterName, locationName } from '../../shared/fountain.js'
 import { changeSheetStatus } from '../../shared/entities.js'
 import { dialogueLineCounts } from '../../shared/dialogue.js'
@@ -38,6 +39,21 @@ const sheets = computed(() => {
     })
 })
 const selected = computed(() => { void props.revision; const sheet = map.value.get(selectedId.value); return sheet && sheet.status !== 'deleted' ? readSheet(props.doc, props.kind, sheet) : null })
+const colors = computed(() => {
+  void props.revision
+  return props.kind === 'characters' ? screenplayCharacterColors(props.doc, props.blocks) : new Map()
+})
+const sheetColor = sheet => colors.value.get(sheet.name.toUpperCase())
+const hasCustomColor = computed(() => {
+  void props.revision
+  return selected.value && isCharacterColor(props.doc.getMap('meta').get(characterColorKey(selected.value.id)))
+})
+function updateColor(color) {
+  const meta = props.doc.getMap('meta')
+  const key = characterColorKey(selected.value.id)
+  if (isCharacterColor(color)) meta.set(key, color)
+  else if (color === null) meta.delete(key)
+}
 function lifecycle(status) {
   if (status === 'deleted' && !window.confirm(`Delete “${selected.value.name}” and its sheet notes and moodboard? Screenplay text is unchanged. Older saved versions may still contain this sheet.`)) return
   try { changeSheetStatus(props.doc, props.kind, selectedId.value, status); selectedId.value = null }
@@ -84,7 +100,7 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
       </label>
       <input v-model="filter" class="search-input" :placeholder="`Find ${kind === 'characters' ? 'a character' : 'a location'}…`" :aria-label="`Search ${kind}`" />
       <button v-for="sheet in sheets" :key="sheet.id" class="sheet-list-item" @click="selectedId = sheet.id">
-        <span class="sheet-initial"><UserRound v-if="kind === 'characters'" :size="17" /><MapPin v-else :size="17" /></span>
+        <span class="sheet-initial" :style="{ color: sheetColor(sheet) }"><UserRound v-if="kind === 'characters'" :size="17" /><MapPin v-else :size="17" /></span>
         <span><strong>{{ sheet.name }}</strong><small>{{ sheet.tagline || (kind === 'characters' ? 'Character sheet' : 'Location sheet') }}</small><small v-if="kind === 'characters'">{{ lineLabel(sheet.lines) }}</small></span>
         <span class="arrow">›</span>
       </button>
@@ -102,6 +118,10 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
       <fieldset :disabled="selected.status === 'archived' || doc.access?.canEdit === false" class="sheet-fields">
       <label class="field-label">Name<input :value="selected.name" class="sheet-name" :disabled="doc.access?.canEdit === false || selected.status === 'archived'" @change="rename" /></label>
       <p class="field-hint">Renaming updates references throughout the screenplay and notes.</p>
+      <div v-if="kind === 'characters'" class="character-color-field">
+        <label class="field-label">Character color<input type="color" :value="sheetColor(selected)" @change="updateColor($event.target.value)" /></label>
+        <button v-if="hasCustomColor" type="button" class="text-button" @click="updateColor(null)">Reset to default</button>
+      </div>
       <label v-if="kind === 'characters'" class="field-label">Age<input :value="selected.age" placeholder="e.g. Early 30s" @input="update('age', $event.target.value)" /></label>
       <label class="field-label">Tagline<input :value="selected.tagline" placeholder="In a few words…" @input="update('tagline', $event.target.value)" /></label>
       <div v-for="field in ['appearance', 'notes']" :key="field" class="markdown-field">
@@ -123,3 +143,9 @@ const render = text => DOMPurify.sanitize(marked.parse(text || ''))
     </template>
   </section>
 </template>
+
+<style scoped>
+.character-color-field { display: flex; align-items: end; gap: 12px; }
+.character-color-field input { width: 64px; height: 34px; padding: 3px; }
+.character-color-field > button { margin-bottom: 10px; }
+</style>

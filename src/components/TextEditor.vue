@@ -13,6 +13,7 @@ import { createScreenplayBinding } from '../lib/screenplay-binding.js'
 import { screenplayTools, wrapSelection, completeName, insertScreenplayName, insertParenthetical } from '../lib/editor-tools.js'
 import { viewportBounds } from '../lib/mobile.js'
 import { useEditorScrollbar } from '../lib/editor-scrollbar.js'
+import { screenplayCharacterColors, isCharacterColorKey } from '../lib/character-colors.js'
 
 const props = defineProps({
   ytext: { type: Object, required: true },
@@ -34,10 +35,26 @@ const presentation = new Compartment()
 const scrollbar = useEditorScrollbar()
 const { rail, metrics: scrollbarMetrics } = scrollbar
 const contentId = `editor-${useId()}`
+const screenplayDoc = props.ytext.doc
+const characters = props.markdown ? null : screenplayDoc.getMap('characters')
+const meta = props.markdown ? null : screenplayDoc.getMap('meta')
+function refreshPresentation() { view?.dispatch({ effects: presentation.reconfigure(extensions()) }); measure() }
+let cueRefreshQueued = false
+function refreshCues() {
+  if (cueRefreshQueued) return
+  cueRefreshQueued = true
+  queueMicrotask(() => {
+    cueRefreshQueued = false
+    refreshPresentation()
+  })
+}
+function cueMetadataChanged(event) {
+  if ([...event.keysChanged].some(isCharacterColorKey)) refreshCues()
+}
 
 function extensions() {
   return props.markdown ? [markdownLanguage(), lineNumbers()] : [
-    fountainFormatting(props.mode === 'live', () => binding?.model.spans || [], () => binding?.annotations() || [], { onImageHover: showImage, onCommentFocus: id => emit('open-comment', id) }),
+    fountainFormatting(props.mode === 'live', () => binding?.model.spans || [], () => binding?.annotations() || [], { onImageHover: showImage, onCommentFocus: id => emit('open-comment', id) }, blocks => screenplayCharacterColors(screenplayDoc, blocks)),
     ...(props.mode === 'split' ? [lineNumbers(), highlightActiveLine()] : []),
   ]
 }
@@ -158,6 +175,8 @@ onMounted(() => {
   })
   binding?.attach(view)
   binding?.setSuggesting(props.review)
+  characters?.observe(refreshCues)
+  meta?.observe(cueMetadataChanged)
   view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
   resizeObserver = new ResizeObserver(measure)
   resizeObserver.observe(host.value)
@@ -184,13 +203,16 @@ function goToAnnotation(annotation) {
 function decide(status) { emit('decide', hovered.value, status); hovered.value = null }
 function command(run) { undo?.stopCapturing(); return run() }
 function revealSelection() { if (view) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 26 }) }) }
-watch(() => props.mode, () => { view?.dispatch({ effects: presentation.reconfigure(extensions()) }); measure() })
+watch(() => props.mode, refreshPresentation)
 watch(() => props.review, value => binding?.setSuggesting(value))
 onBeforeUnmount(() => {
   clearTimeout(hoverTimer)
   resizeObserver?.disconnect()
+  characters?.unobserve(refreshCues)
+  meta?.unobserve(cueMetadataChanged)
   view?.scrollDOM.removeEventListener('scroll', onScroll)
   view?.destroy()
+  view = null
   if (binding) binding.destroy()
   else undo?.destroy()
 })

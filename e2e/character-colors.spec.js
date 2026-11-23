@@ -1,0 +1,46 @@
+import { test, expect } from '@playwright/test'
+
+test('fictional character cues have distinct defaults and keep independent custom colors', async ({ page, request }) => {
+  const text = 'INT. ROOM - DAY\n\nMARA\nHello.\n\nELI\nWait.\n\nMARA (V.O.)\nGo.\n\nELI ^\nNow?\n'
+  const response = await request.post('/api/documents', { data: { title: 'Character colors', text } })
+  expect(response.ok()).toBeTruthy()
+  const { id } = await response.json()
+  await page.goto(`/?document=${id}`)
+
+  const cues = page.locator('.ft-character .character-cue-color')
+  const mara = cues.filter({ hasText: /^MARA$/ }).first()
+  const eli = cues.filter({ hasText: /^ELI$/ }).first()
+  await expect(mara).toHaveCSS('text-decoration-line', 'underline')
+  await expect(eli).toHaveCSS('text-decoration-line', 'underline')
+  const cueColor = cue => cue.evaluate(node => getComputedStyle(node).textDecorationColor)
+  const maraDefault = await cueColor(mara)
+  const eliDefault = await cueColor(eli)
+  expect(maraDefault).not.toBe(eliDefault)
+  await expect(page.locator('.live-dual-dialogue .character').filter({ hasText: 'MARA' })).toHaveCSS('text-decoration-color', maraDefault)
+
+  const openCharacters = () => page.getByRole('button', { name: 'Characters', exact: true }).click()
+  const openSheet = name => page.getByRole('button', { name: new RegExp(`^${name} Character sheet`) }).click()
+  const picker = page.getByLabel('Character color')
+  await openCharacters()
+  await openSheet('MARA')
+  await picker.fill('#3456ab')
+  await expect(mara).toHaveCSS('text-decoration-color', 'rgb(52, 86, 171)')
+  await expect(eli).toHaveCSS('text-decoration-color', eliDefault)
+  await expect(page.locator('.live-dual-dialogue .character').filter({ hasText: 'MARA' })).toHaveCSS('text-decoration-color', 'rgb(52, 86, 171)')
+
+  await page.getByRole('button', { name: 'All characters' }).click()
+  await openSheet('ELI')
+  await picker.fill('#b74682')
+  await expect(eli).toHaveCSS('text-decoration-color', 'rgb(183, 70, 130)')
+  await expect(mara).toHaveCSS('text-decoration-color', 'rgb(52, 86, 171)')
+
+  await page.reload()
+  await page.getByRole('button', { name: 'Split', exact: true }).click()
+  await expect(mara).toHaveCSS('text-decoration-color', 'rgb(52, 86, 171)')
+  await expect(eli).toHaveCSS('text-decoration-color', 'rgb(183, 70, 130)')
+  await openCharacters()
+  await openSheet('ELI')
+  await expect(picker).toHaveValue('#b74682')
+  await page.getByRole('button', { name: 'Reset to default' }).click()
+  await expect(eli).toHaveCSS('text-decoration-color', eliDefault)
+})
