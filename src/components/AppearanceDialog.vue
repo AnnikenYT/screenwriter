@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watchEffect } from 'vue'
 import { X } from 'lucide-vue-next'
 
 const modes = { system: 'System', light: 'Light', dark: 'Dark' }
-const palettes = { sage: 'Sage', ocean: 'Ocean', plum: 'Plum' }
+const palettes = { sage: 'Sage', ocean: 'Ocean', plum: 'Plum', mono: 'Mono', gruvbox: 'Gruvbox' }
 const media = window.matchMedia('(prefers-color-scheme: dark)')
 const systemDark = ref(media.matches)
 const mode = ref(Object.hasOwn(modes, localStorage.getItem('theme')) ? localStorage.getItem('theme') : 'system')
