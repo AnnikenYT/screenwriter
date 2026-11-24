@@ -23,6 +23,7 @@ import { useMobileLayout } from './lib/mobile.js'
 import { usePwa } from './lib/pwa.js'
 import { flushCollaboration } from './lib/sync-barrier.js'
 import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js'
+import { defaultEditorColor, editorColorInk, isEditorColor } from '../shared/editor-colors.js'
 import { Settings } from 'lucide-vue-next'
 
 const session = ref(null)
@@ -70,6 +71,15 @@ const blocks = shallowRef([])
 const synced = ref(false)
 const status = ref('connecting')
 const peers = ref([])
+const presencePeople = computed(() => {
+  const people = new Map()
+  for (const peer of peers.value) {
+    const key = peer.id || `${peer.name}\0${peer.color}`
+    if (!people.has(key)) people.set(key, { key, name: peer.name || 'Writer', color: peer.color || '#597d67', self: false })
+  }
+  return [{ key: 'self', name: session.value?.user?.name || 'You', color: session.value?.user?.color || '#597d67', self: true }, ...people.values()]
+})
+const presenceNames = computed(() => presencePeople.value.map(person => `${person.name}${person.self ? ' (you)' : ''}`).join(', '))
 const sidebar = ref(window.innerWidth > 900)
 const panel = ref('outline')
 const sceneSort = ref('script')
@@ -90,6 +100,7 @@ const displaySource = ref('')
 const displayBlocks = computed(() => parseFountain(displaySource.value))
 const profileOpen = ref(false)
 const writerName = ref('')
+const editorColor = ref('#2563eb')
 const savingName = ref(false)
 const imageLinkOpen = ref(false)
 let profileChannel
@@ -148,6 +159,7 @@ async function initialize() {
     if (shareToken.value) { await openSharedLink(); return }
     if (!session.value.user) return
     writerName.value = session.value.user.nameSet ? session.value.user.name : ''
+    editorColor.value = session.value.user.color || defaultEditorColor(session.value.user.id)
     await refreshDocuments()
     const requested = new URL(location.href).searchParams.get('document')
     if (requested && await openDocument(requested)) return
@@ -302,16 +314,25 @@ async function decideSuggestion(suggestion, decision) {
   try { await api(`/api/documents/${currentId.value}/suggestions/${suggestion.id}/decide`, { method: 'POST', body: { decision } }) }
   catch (error) { notify(error.message) }
 }
-function editName() { writerName.value = session.value.user.name; profileOpen.value = true; nextTick(() => document.getElementById('writer-name')?.focus()) }
+function editProfile() {
+  writerName.value = session.value.user.nameSet ? session.value.user.name : ''
+  editorColor.value = session.value.user.color || defaultEditorColor(session.value.user.id)
+  profileOpen.value = true
+  nextTick(() => document.getElementById(session.value.user.account ? 'editor-color' : 'writer-name')?.focus())
+}
 function applyProfile(user) {
-  if (!user || !session.value?.user || (session.value.authMode !== 'none' && !session.value.user.guest) || user.id !== session.value.user.id) return
+  if (!user || !session.value?.user || user.id !== session.value.user.id) return
   session.value.user = user
-  connection.value?.provider.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: `${user.color}25` })
+  if (!isEditorColor(editorColor.value)) editorColor.value = user.color
+  connection.value?.provider.awareness.setLocalStateField('user', { id: user.id, name: user.name, color: user.color, colorLight: `${user.color}25` })
 }
 async function saveName() {
   savingName.value = true
   try {
-    const updated = await api('/api/session', { method: 'PATCH', body: { name: writerName.value } })
+    const color = isEditorColor(editorColor.value) ? editorColor.value.toLowerCase() : session.value.user.color
+    const body = { color }
+    if (!session.value.user.account) body.name = writerName.value
+    const updated = await api('/api/session', { method: 'PATCH', body })
     applyProfile(updated.user)
     profileChannel?.postMessage(updated.user)
     profileOpen.value = false
@@ -517,12 +538,13 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       </div>
       <div class="toolbar-actions">
         <a v-if="session.user.guest" class="text-button" :href="signInURL()">Sign in</a>
-        <div class="collaborators" :title="[session.user.name + ' (you)', ...peers.map(p => p.name)].join(', ')"><button
-            v-if="session.authMode === 'none' || session.user.guest" class="avatar" :style="{ background: session.user.color }"
-            aria-label="Set writer name" :title="`${session.user.name} · Set your name`" @click="editName">{{
-              session.user.name.slice(0, 1) }}</button><span v-else class="avatar"
-            :style="{ background: session.user.color }">{{ session.user.name.slice(0, 1) }}</span><span
-            v-for="(peer, i) in peers.slice(0, 3)" :key="i" class="avatar" :style="{ background: peer.color }">{{
+        <div class="collaborators" :title="presenceNames" :aria-label="`Collaborators: ${presenceNames}`"><button
+            class="avatar" :style="{ background: session.user.color, color: editorColorInk(session.user.color) }"
+            :aria-label="session.user.account ? 'Set editor color' : 'Set writer name'"
+            :title="`${session.user.name} · ${session.user.account ? 'Set your color' : 'Set your name'}`"
+            @click="editProfile">{{ session.user.name.slice(0, 1) }}</button><span
+            v-for="(peer, i) in peers.slice(0, 3)" :key="i" class="avatar" :title="peer.name"
+            :aria-label="peer.name" :style="{ background: peer.color, color: editorColorInk(peer.color) }">{{
               peer.name.slice(0, 1) }}</span><span v-if="peers.length > 3" class="avatar extra">+{{ peers.length - 3
             }}</span></div>
         <button class="icon-button share-button" :disabled="!synced"
@@ -779,8 +801,11 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
     <footer class="statusbar">
       <span :class="['connection-status', { offline: status !== 'connected' }]"><i />{{ status === 'connected' ? 'Live'
         : 'Reconnecting…' }}</span>
-      <span class="status-separator">·</span><span>{{ peers.length + 1 }} {{ peers.length ? 'collaborators' : 'writer'
-        }}</span>
+      <span class="status-separator">·</span>
+      <span class="presence-summary" :aria-label="`Collaborators: ${presenceNames}`"><span>{{ peers.length + 1 }} {{ peers.length ? 'collaborators' : 'writer'
+        }}</span><span class="presence-names"><span v-for="person in presencePeople" :key="person.key"
+            class="presence-person"><i :style="{ background: person.color }" />{{ person.name }}<em
+              v-if="person.self"> (you)</em></span></span></span>
       <span class="status-spacer" /><span class="status-hint">{{ dirtyOffline ? 'Unsynced edits · keep this tab open' :
         mode === 'live' ? 'Click a line to reveal its Fountain source' : 'Plain text, live preview' }}</span>
       <span class="status-spacer" /><span>{{ words.toLocaleString() }} words</span><span
@@ -851,15 +876,28 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
       <form class="modal writer-profile-modal" role="dialog" aria-modal="true" aria-labelledby="writer-profile-title"
         @submit.prevent="saveName">
         <header>
-          <h2 id="writer-profile-title">Your writer name</h2><button type="button" class="icon-button"
-            aria-label="Close writer profile" @click="profileOpen = false">
+          <h2 id="writer-profile-title">{{ session.user.account ? 'Your profile' : 'Your writer name' }}</h2>
+          <button type="button" class="icon-button" aria-label="Close writer profile" @click="profileOpen = false">
             <X :size="18" />
           </button>
         </header>
-        <p class="small muted">Shown to collaborators and on your new comments and suggestions. No account required.</p>
-        <label class="field-label" for="writer-name">Display name<input id="writer-name" v-model="writerName"
-            maxlength="60" autocomplete="nickname" required /></label>
-        <button class="primary-button" :disabled="savingName || !writerName.trim()">Save name</button>
+        <p v-if="session.user.account" class="small muted">Signed in as {{ session.user.name }}. Choose a color for
+          your cursor, selections and avatar.</p>
+        <p v-else class="small muted">Shown to collaborators and on your new comments and suggestions. No account
+          required.</p>
+        <label v-if="!session.user.account" class="field-label" for="writer-name">Display name<input id="writer-name"
+            v-model="writerName" maxlength="60" autocomplete="nickname" required /></label>
+        <div class="editor-color-field">
+          <label class="field-label" for="editor-color">Editor color<input id="editor-color" v-model="editorColor"
+              type="color" aria-label="Editor color" /></label>
+          <span class="editor-color-preview" :style="{ background: editorColor, color: editorColorInk(editorColor) }"
+            aria-hidden="true">{{ session.user.name.slice(0, 2).toUpperCase() }}</span>
+          <button type="button" class="text-button"
+            @click="editorColor = defaultEditorColor(session.user.id)">Use default</button>
+        </div>
+        <p class="small muted">Separate from character colors in the screenplay.</p>
+        <button class="primary-button"
+          :disabled="savingName || (!session.user.account && !writerName.trim())">{{ session.user.account ? 'Save color' : 'Save name' }}</button>
       </form>
     </div>
     <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen = false">

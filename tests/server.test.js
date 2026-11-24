@@ -101,6 +101,54 @@ test('guest display names persist without changing the session, identity, expiry
   }
 });
 
+test('anonymous editor colors persist per session without rotating cookies or changing screenplay text', async () => {
+  const dir = await mkdtemp('/tmp/screenwriter/screenplay-editor-colors-');
+  let server = await start(dir);
+  let database;
+  try {
+    const first = await fetch(`${server.base}/api/session`);
+    const identity = await first.json();
+    assert.match(identity.user.color, /^#[0-9a-f]{6}$/);
+    const cookie = first.headers.get('set-cookie').split(';')[0];
+    const other = await fetch(`${server.base}/api/session`);
+    const otherIdentity = await other.json();
+    const otherCookie = other.headers.get('set-cookie').split(';')[0];
+    const patch = (body, extra = {}) => fetch(`${server.base}/api/session`, {
+      method: 'PATCH', headers: { cookie, 'Content-Type': 'application/json', ...extra },
+      body: JSON.stringify(body),
+    });
+    for (const color of [undefined, null, 42, {}, 'red', '#abc', '#12345g', '#1234567', ' #112233']) {
+      assert.equal((await patch({ color })).status, 400, `invalid editor color ${JSON.stringify(color)}`);
+    }
+    const changed = await patch({ color: '#1F6FEB' });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.headers.get('set-cookie'), null, 'the session cookie is not rotated');
+    assert.deepEqual(await changed.json(), { authMode: 'none', user: { ...identity.user, color: '#1f6feb' } });
+    assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie } })).json(),
+      { authMode: 'none', user: { ...identity.user, color: '#1f6feb' } });
+    database = new DatabaseSync(path.join(dir, 'workspace.sqlite'));
+    const sessionId = createHash('sha256').update(cookie.split('=')[1]).digest('hex');
+    assert.equal(JSON.parse(database.prepare('SELECT user FROM sessions WHERE id=?').get(sessionId).user).color, '#1f6feb');
+    assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie: otherCookie } })).json(), otherIdentity);
+    const created = await fetch(`${server.base}/api/documents`, {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Colors', text: 'INT. ROOM - DAY\n\nMARA\nHello.\n' }),
+    });
+    const { id } = await created.json();
+    assert.equal((await patch({ color: '#b42318' })).status, 200);
+    assert.equal(await (await fetch(`${server.base}/api/documents/${id}/export.fountain`, { headers: { cookie } })).text(),
+      'INT. ROOM - DAY\n\nMARA\nHello.\n');
+    database.close(); database = null;
+    await server.close();
+    server = await start(dir);
+    assert.deepEqual(await (await fetch(`${server.base}/api/session`, { headers: { cookie } })).json(),
+      { authMode: 'none', user: { ...identity.user, color: '#b42318' } });
+  } finally {
+    database?.close();
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('PDF keeps character cues and nested production emphasis bold', () => {
   const calls = [];
   let font = 'Courier';
@@ -336,6 +384,8 @@ test('OAuth denies protected HTTP routes, uploads and websocket upgrades', async
     const session = await (await fetch(`${server.base}/api/session`)).json();
     assert.deepEqual(session, { authMode: 'oauth', user: null });
     assert.equal((await fetch(`${server.base}/api/session`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed' }) })).status, 403);
+    assert.equal((await fetch(`${server.base}/api/session`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color: '#1f6feb' }) })).status, 401);
+    assert.equal((await fetch(`${server.base}/api/session`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Changed', color: '#1f6feb' }) })).status, 403);
     for (const route of ['/api/documents', '/api/documents/anything/versions', '/api/documents/anything/export.pdf', '/uploads/test.png']) {
       assert.equal((await fetch(`${server.base}${route}`)).status, 401);
     }

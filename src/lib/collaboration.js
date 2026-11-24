@@ -14,7 +14,7 @@ export function connect(id, user, access = { canEdit: true }) {
   doc.access = access
   doc.documentId = id
   provider.connect()
-  provider.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: `${user.color}25` })
+  provider.awareness.setLocalStateField('user', { id: user.id, name: user.name, color: user.color, colorLight: `${user.color}25` })
   return { doc, provider, text: doc.getText('screenplay'), scratchpad: doc.getText('scratchpad') }
 }
 

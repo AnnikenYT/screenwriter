@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 import { applyReviewChanges, projectReview, sourceToView, viewToSource, annotationViewRange } from './review-model.js'
 import { relativeAnchor, resolveAnchor } from './collaboration.js'
 import { sendReviewChanges } from './review-api.js'
+import { editorColorInk } from '../../shared/editor-colors.js'
 
 const refreshReview = StateEffect.define()
 const remoteReview = Transaction.remote
@@ -30,6 +31,7 @@ class PeerCursor extends WidgetType {
     const el = document.createElement('span')
     el.className = 'peer-cursor'
     el.style.setProperty('--peer-color', this.user.color || '#597d67')
+    el.style.setProperty('--peer-ink', editorColorInk(this.user.color))
     const label = document.createElement('span')
     label.textContent = this.user.name || 'Writer'
     el.append(label)

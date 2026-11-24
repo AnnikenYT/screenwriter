@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID, createHash, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { defaultEditorColor, normalizeEditorColor } from '../shared/editor-colors.js';
 
 const derive = promisify(scrypt);
 export const digest = value => createHash('sha256').update(value).digest('hex');
@@ -39,6 +40,12 @@ export function initializeAccess(db, mode) {
   if (!db.prepare('PRAGMA table_info(share_sessions)').all().some(column => column.name === 'name')) {
     db.exec('ALTER TABLE share_sessions ADD COLUMN name TEXT');
   }
+  if (!db.prepare('PRAGMA table_info(accounts)').all().some(column => column.name === 'color')) {
+    db.exec('ALTER TABLE accounts ADD COLUMN color TEXT');
+  }
+  if (!db.prepare('PRAGMA table_info(share_sessions)').all().some(column => column.name === 'color')) {
+    db.exec('ALTER TABLE share_sessions ADD COLUMN color TEXT');
+  }
 }
 
 export function createAccess(db, { mode, publicURL, changed = () => {} }) {
@@ -49,13 +56,15 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     try { email = normalizeEmail(payload.email); } catch { /* Email is optional until accepting an invitation. */ }
     const verified = Boolean(email && payload.email_verified === true);
     const name = String(payload.name || email || 'Writer').slice(0, 120);
-    db.prepare(`INSERT INTO accounts VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email,email_verified=excluded.email_verified,name=excluded.name`)
+    db.prepare(`INSERT INTO accounts(id,issuer,subject,email,email_verified,name) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET email=excluded.email,email_verified=excluded.email_verified,name=excluded.name`)
       .run(id, payload.iss, payload.sub, email, Number(verified), name);
     if (verified) {
       db.prepare('UPDATE document_grants SET user_id=? WHERE kind=? AND email=? AND user_id IS NULL AND revoked_at IS NULL').run(id, 'user', email);
       db.prepare("UPDATE documents SET owner_id=? WHERE scope='private' AND owner_id IS NULL AND owner_email=?").run(id, email);
     }
-    return { id, name, email, emailVerified: verified, account: true, color: '#2563eb' };
+    const color = db.prepare('SELECT color FROM accounts WHERE id=?').get(id)?.color;
+    return { id, name, email, emailVerified: verified, account: true, color: normalizeEditorColor(color) || defaultEditorColor(id) };
   }
   function cookie(req, name) {
     return (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(name + '='))?.slice(name.length + 1);
@@ -64,14 +73,28 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     const raw = cookie(req, 'screenplay_share');
     if (!raw || !/^[A-Za-z0-9_-]{43}$/.test(raw)) return null;
     const row = db.prepare('SELECT * FROM share_sessions WHERE id=? AND expires_at>?').get(digest(raw), Date.now());
-    return row ? { id: row.visitor_id, name: row.name || `Guest ${row.visitor_id.slice(-4)}`, nameSet: Boolean(row.name), color: '#7c3aed', guest: true } : null;
+    return row ? {
+      id: row.visitor_id,
+      name: row.name || `Guest ${row.visitor_id.slice(-4)}`,
+      nameSet: Boolean(row.name),
+      color: normalizeEditorColor(row.color) || defaultEditorColor(row.visitor_id),
+      guest: true,
+    } : null;
   }
-  function setGuestName(req, name) {
+  function setGuestProfile(req, profile) {
     if (!req.user?.guest) throw fail(403, 'Not permitted');
-    const result = db.prepare('UPDATE share_sessions SET name=? WHERE id=? AND visitor_id=? AND expires_at>?')
-      .run(name, guestSession(req), req.user.id, Date.now());
+    const result = db.prepare('UPDATE share_sessions SET name=COALESCE(?,name),color=COALESCE(?,color) WHERE id=? AND visitor_id=? AND expires_at>?')
+      .run(profile.name ?? null, profile.color ?? null, guestSession(req), req.user.id, Date.now());
     if (!result.changes) throw fail(401, 'Session expired');
     return guest(req);
+  }
+  function setGuestName(req, name) {
+    return setGuestProfile(req, { name });
+  }
+  function setAccountColor(req, color) {
+    if (!req.user?.account) throw fail(403, 'Not permitted');
+    db.prepare('UPDATE accounts SET color=? WHERE id=?').run(color, req.user.id);
+    return { ...req.user, color };
   }
   function guestSession(req) {
     const raw = cookie(req, 'screenplay_share');
@@ -268,5 +291,5 @@ export function createAccess(db, { mode, publicURL, changed = () => {} }) {
     for (const [key, value] of attempts) if (value.until < Date.now()) attempts.delete(key);
     db.prepare('DELETE FROM share_sessions WHERE expires_at<=?').run(Date.now());
   }
-  return { account, guest, setGuestName, permission, requirePermission, publicPermission, list, createGrant, shares, sharingInfo, updateGrant, revoke, leave, openLink, cleanup };
+  return { account, guest, setGuestName, setGuestProfile, setAccountColor, permission, requirePermission, publicPermission, list, createGrant, shares, sharingInfo, updateGrant, revoke, leave, openLink, cleanup };
 }

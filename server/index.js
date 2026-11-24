@@ -18,6 +18,7 @@ import { reconcileSheets } from '../shared/entities.js';
 import { createAccess, normalizeEmail } from './access.js';
 import { applyReviewChanges, projectReview } from '../shared/review-model.js';
 import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js';
+import { defaultEditorColor, isEditorColor, normalizeEditorColor } from '../shared/editor-colors.js';
 import nodemailer from 'nodemailer';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -93,7 +94,11 @@ export function createWorkspace(options = {}) {
     const record = db.prepare('SELECT user FROM sessions WHERE id=? AND expires>?').get(sha(raw), Date.now());
     if (!record) return null;
     const user = JSON.parse(record.user);
-    if (authMode === 'oauth' && (!user.account || !db.prepare('SELECT 1 FROM accounts WHERE id=?').get(user.id))) return null;
+    if (authMode === 'oauth') {
+      const account = user.account && db.prepare('SELECT color FROM accounts WHERE id=?').get(user.id);
+      if (!account) return null;
+      user.color = normalizeEditorColor(account.color) || defaultEditorColor(user.id);
+    }
     if (authMode === 'none' && user.account) return null;
     if (authMode === 'none') user.nameSet ??= !/^Writer [0-9a-f]{4}$/i.test(user.name);
     return user;
@@ -124,7 +129,8 @@ export function createWorkspace(options = {}) {
     req.sessionKey = sessionKey(req);
     const publicAsset = ['GET', 'HEAD'].includes(req.method) && /^\/(?:assets\/|icons\/|sw\.js$|offline\.html$|manifest\.webmanifest$)/.test(req.path);
     if (!req.user && authMode === 'none' && !publicAsset) {
-      req.user = { id: randomUUID(), name: `Writer ${randomBytes(2).toString('hex')}`, nameSet: false, color: ['#c2410c', '#2563eb', '#7c3aed', '#047857'][randomBytes(1)[0] % 4] };
+      const id = randomUUID();
+      req.user = { id, name: `Writer ${randomBytes(2).toString('hex')}`, nameSet: false, color: defaultEditorColor(id) };
       req.sessionKey = setSession(res, req.user);
     }
     next();
@@ -135,12 +141,34 @@ export function createWorkspace(options = {}) {
       ...(req.user?.account ? { preferences: { titlePageAlignment: accountAlignment(req.user.id) } } : {}) });
   });
   app.patch('/api/session', (req, res) => {
-    if (authMode !== 'none' && !req.user?.guest) throw fail(403, 'Display names are managed by your identity provider');
-    const name = req.body?.name;
-    if (typeof name !== 'string' || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(name) ||
-      name.trim().length < 1 || name.trim().length > 60) throw fail(400, 'Name must be 1–60 characters on one line, without control characters');
-    const user = req.user.guest ? access.setGuestName(req, name.trim()) : { ...req.user, name: name.trim(), nameSet: true };
-    if (!req.user.guest) db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
+    const body = req.body || {};
+    const wantsColor = body.color !== undefined;
+    // A payload without a color keeps the original name-only behavior, including its validation errors.
+    const wantsName = body.name !== undefined || !wantsColor;
+    let name;
+    if (wantsName) {
+      if (authMode !== 'none' && !req.user?.guest) throw fail(403, 'Display names are managed by your identity provider');
+      if (typeof body.name !== 'string' || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(body.name) ||
+        body.name.trim().length < 1 || body.name.trim().length > 60) throw fail(400, 'Name must be 1–60 characters on one line, without control characters');
+      name = body.name.trim();
+    }
+    let color;
+    if (wantsColor) {
+      if (!isEditorColor(body.color)) throw fail(400, 'Editor color must be a six-digit hex color');
+      color = body.color.toLowerCase();
+    }
+    if (!req.user) throw fail(401, 'Sign in required');
+    let user = req.user;
+    if (user.guest) {
+      user = access.setGuestProfile(req, {
+        ...(name !== undefined ? { name } : {}),
+        ...(color !== undefined ? { color } : {}),
+      });
+    } else {
+      if (name !== undefined) user = { ...user, name, nameSet: true };
+      if (color !== undefined) user = user.account ? access.setAccountColor(req, color) : { ...user, color };
+      db.prepare('UPDATE sessions SET user=? WHERE id=? AND expires>?').run(JSON.stringify(user), req.sessionKey, Date.now());
+    }
     res.setHeader('Cache-Control', 'no-store');
     res.json({ authMode, user });
   });

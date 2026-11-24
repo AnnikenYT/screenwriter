@@ -11,6 +11,7 @@ import * as encoding from 'lib0/encoding'
 import * as sync from 'y-protocols/sync'
 import { createWorkspace } from '../server/index.js'
 import { createAccess, digest } from '../server/access.js'
+import { defaultEditorColor } from '../shared/editor-colors.js'
 import { relativeAnchor } from '../shared/anchors.js'
 import { flushCollaboration } from '../src/lib/sync-barrier.js'
 
@@ -68,7 +69,7 @@ async function fixture(t, options = {}) {
   }
   t.after(async () => { peers.forEach(peer => peer.close()); db.close(); await server.close(); await rm(directory, { recursive: true, force: true }) })
   return {
-    directory, db, client, register, connect, get base() { return base },
+    directory, get db() { return db }, client, register, connect, get base() { return base },
     async restart(mode = 'oauth') { peers.splice(0).forEach(peer => peer.close()); db.close(); await server.close(); await start(mode) },
   }
 }
@@ -94,6 +95,49 @@ test('title page alignment is validated and stored per account across sessions a
   await secondSession.json(preferences, 'PATCH', { titlePageAlignment: 'right' })
   assert.deepEqual((await alice.json('/api/session')).preferences, { titlePageAlignment: 'right' })
 })
+test('editor colors persist per account and link guest without touching screenplay data', async t => {
+  const f = await fixture(t)
+  const alice = f.register('colors-alice@example.com'), bob = f.register('colors-bob@example.com')
+  const aliceSession = await alice.json('/api/session'), bobSession = await bob.json('/api/session')
+  const existingSession = f.register('colors-alice@example.com')
+  assert.match(aliceSession.user.color, /^#[0-9a-f]{6}$/)
+  assert.match(bobSession.user.color, /^#[0-9a-f]{6}$/)
+  assert.notEqual(defaultEditorColor('editor-a'), defaultEditorColor('editor-b'))
+  assert.equal((await alice.call('/api/session', 'PATCH', {})).status, 403)
+  for (const color of [null, 42, {}, 'red', '#abc', '#12345g', '#1234567', ' #112233']) {
+    assert.equal((await alice.call('/api/session', 'PATCH', { color })).status, 400, `invalid editor color ${JSON.stringify(color)}`)
+  }
+  const changed = await alice.json('/api/session', 'PATCH', { color: '#1F6FEB' })
+  assert.deepEqual(changed.user, { ...aliceSession.user, color: '#1f6feb' })
+  assert.equal((await alice.json('/api/session')).user.color, '#1f6feb')
+  assert.equal((await existingSession.json('/api/session')).user.color, '#1f6feb')
+  assert.equal((await alice.call('/api/session', 'PATCH', { name: 'Not allowed' })).status, 403)
+  assert.equal((await bob.json('/api/session')).user.color, bobSession.user.color)
+
+  const { id } = await alice.json('/api/documents', 'POST', document)
+  await alice.json('/api/session', 'PATCH', { color: '#b42318' })
+  assert.equal(await (await alice.call(`/api/documents/${id}/export.fountain`)).text(), document.text)
+  await f.restart()
+  const secondSession = f.register('colors-alice@example.com')
+  assert.equal((await secondSession.json('/api/session')).user.color, '#b42318')
+  assert.equal((await secondSession.json('/api/documents')).length, 1)
+
+  const link = await secondSession.json(`/api/documents/${id}/shares`, 'POST', { kind: 'link', role: 'reviewer', canInvite: false, canExport: false })
+  const visitor = f.client(), other = f.client(), token = new URL(link.url).hash.slice(1)
+  await visitor.json('/api/shares/open', 'POST', { token })
+  await other.json('/api/shares/open', 'POST', { token })
+  const before = (await visitor.json('/api/session')).user, otherBefore = (await other.json('/api/session')).user
+  const guestChanged = await visitor.json('/api/session', 'PATCH', { color: '#0F766E' })
+  assert.deepEqual(guestChanged.user, { ...before, color: '#0f766e' })
+  assert.equal(guestChanged.user.nameSet, false)
+  assert.equal(f.db.prepare('SELECT name FROM share_sessions WHERE visitor_id=?').get(before.id).name, null)
+  const both = await visitor.json('/api/session', 'PATCH', { name: 'Color Guest', color: '#C2410C' })
+  assert.deepEqual(both.user, { ...before, name: 'Color Guest', nameSet: true, color: '#c2410c' })
+  assert.equal((await other.json('/api/session')).user.color, otherBefore.color)
+  await f.restart()
+  assert.deepEqual((await visitor.json('/api/session')).user, both.user)
+})
+
 const grant = (email, role = 'viewer', flags = {}) => ({ kind: 'user', email, role, canInvite: false, canExport: false, ...flags })
 
 test('link guests can save a name without changing identity, expiry, access or other guests', async t => {
