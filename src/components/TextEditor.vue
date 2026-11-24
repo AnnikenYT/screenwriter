@@ -14,6 +14,7 @@ import { screenplayTools, wrapSelection, completeName, insertScreenplayName, ins
 import { viewportBounds } from '../lib/mobile.js'
 import { useEditorScrollbar } from '../lib/editor-scrollbar.js'
 import { screenplayCharacterColors, isCharacterColorKey } from '../lib/character-colors.js'
+import { lineBlameGutter } from '../lib/line-blame-gutter.js'
 
 const props = defineProps({
   ytext: { type: Object, required: true },
@@ -23,6 +24,7 @@ const props = defineProps({
   markdown: Boolean,
   review: Boolean,
   readOnly: Boolean,
+  blameRuns: { type: Array, default: null },
 })
 const emit = defineEmits(['selection', 'cursor', 'geometry', 'display', 'error', 'decide', 'link-image', 'open-comment', 'scroll'])
 const host = ref(null)
@@ -32,6 +34,7 @@ const hoverStyle = ref({})
 const unsavedReview = ref(null)
 let view, undo, binding, resizeObserver, hoverTimer
 const presentation = new Compartment()
+const attribution = new Compartment()
 const scrollbar = useEditorScrollbar()
 const { rail, metrics: scrollbarMetrics } = scrollbar
 const contentId = `editor-${useId()}`
@@ -154,6 +157,8 @@ onMounted(() => {
         ...(binding ? binding.extensions : [yCollab(props.ytext, props.awareness, { undoManager: undo })]),
         ...(!props.markdown ? screenplayTools(props.ytext.doc, () => emit('link-image')) : []),
          presentation.of(extensions()),
+         attribution.of(props.blameRuns ? lineBlameGutter(props.blameRuns) : []),
+         ...(!props.markdown ? [EditorState.lineSeparator.of('\n')] : []),
          EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly),
         EditorView.lineWrapping, drawSelection(), highlightSelectionMatches(),
         placeholder(props.markdown ? 'Notes, ideas, loose ends…' : 'INT. SOMEWHERE - DAY\n\nStart writing.'),
@@ -204,6 +209,7 @@ function decide(status) { emit('decide', hovered.value, status); hovered.value =
 function command(run) { undo?.stopCapturing(); return run() }
 function revealSelection() { if (view) view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest', yMargin: 26 }) }) }
 watch(() => props.mode, refreshPresentation)
+watch(() => props.blameRuns, runs => view?.dispatch({ effects: attribution.reconfigure(runs ? lineBlameGutter(runs) : []) }))
 watch(() => props.review, value => binding?.setSuggesting(value))
 onBeforeUnmount(() => {
   clearTimeout(hoverTimer)
@@ -253,3 +259,18 @@ defineExpose({
     </section>
   </Teleport>
 </template>
+
+<style>
+.cm-editor .cm-line-blame {
+  width: clamp(7.5rem, 12vw, 10rem);
+  color: var(--text, #333);
+}
+.line-blame-writer {
+  display: flex;
+  white-space: pre;
+  padding: 0 .35rem;
+  margin-inline: .25rem;
+  border-inline-start: 3px solid var(--writer-color, transparent);
+}
+.line-blame-writer > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

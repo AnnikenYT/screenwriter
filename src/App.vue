@@ -24,7 +24,8 @@ import { usePwa } from './lib/pwa.js'
 import { flushCollaboration } from './lib/sync-barrier.js'
 import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js'
 import { defaultEditorColor, editorColorInk, isEditorColor } from '../shared/editor-colors.js'
-import { Settings } from 'lucide-vue-next'
+import { Settings, GitCommitHorizontal } from 'lucide-vue-next'
+import { writerRunAt } from './lib/line-blame-gutter.js'
 
 const session = ref(null)
 const alignmentStorageKey = 'screenwriter-title-page-alignment'
@@ -86,6 +87,10 @@ const sceneSort = ref('script')
 const characterSort = ref('name')
 const mode = ref(localStorage.getItem('editor-mode') || 'live')
 const reviewMode = ref(false)
+const showBlame = ref(localStorage.getItem('screenwriter-line-blame') === 'true')
+const blameRuns = shallowRef(null)
+const blameStatus = ref('')
+let blameTimer, blameRequest
 const selection = ref({ from: 0, to: 0, text: '' })
 const cursor = ref({ line: 1, column: 1 })
 const editor = ref(null)
@@ -98,6 +103,9 @@ const lineComments = ref(null)
 const geometry = ref(null)
 const displaySource = ref('')
 const displayBlocks = computed(() => parseFountain(displaySource.value))
+const visibleBlame = computed(() => showBlame.value && mode.value === 'split' && displaySource.value === source.value
+  ? blameRuns.value : null)
+const cursorWriter = computed(() => visibleBlame.value?.[writerRunAt(visibleBlame.value, cursor.value.line)]?.writer)
 const profileOpen = ref(false)
 const writerName = ref('')
 const editorColor = ref('#2563eb')
@@ -183,6 +191,9 @@ async function openSharedLink() {
   finally { openingShare.value = false }
 }
 function cleanup() {
+  clearTimeout(blameTimer)
+  blameRequest?.abort()
+  blameRuns.value = null
   clearTimeout(timer)
   clearTimeout(pendingFlushTimer)
   if (connection.value) {
@@ -235,6 +246,7 @@ async function openDocument(id) {
     }
   }
   documentUpdate = (_update, origin) => {
+    refreshBlame()
     revision.value++
     if (origin !== current.provider) {
       localVersion++
@@ -250,11 +262,13 @@ async function openDocument(id) {
     if (!value) return
     synced.value = true
     refresh()
+    refreshBlame()
     confirmPending()
   })
   current.provider.on('status', event => {
     if (token !== generation) return
     status.value = event.status
+    refreshBlame()
   })
   current.provider.on('connection-error', () => { if (!synced.value) error.value = 'Unable to connect. Check the server or sign in again.' })
   current.provider.on('connection-close', event => {
@@ -308,6 +322,52 @@ function renameTitle() {
 }
 function selectPanel(id) { panel.value = id; sidebar.value = true }
 function setMode(value) { mode.value = value; localStorage.setItem('editor-mode', value) }
+function toggleBlame() {
+  showBlame.value = !(showBlame.value && mode.value === 'split')
+  localStorage.setItem('screenwriter-line-blame', showBlame.value)
+  if (showBlame.value) setMode('split')
+}
+function refreshBlame(delay = 200, attempt = 0) {
+  clearTimeout(blameTimer)
+  blameRequest?.abort()
+  blameRequest = null
+  blameRuns.value = null
+  blameStatus.value = ''
+  const current = connection.value
+  if (!showBlame.value || mode.value !== 'split' || !synced.value || !current || roomUnavailable.value) return
+  if (status.value !== 'connected' || dirtyOffline.value) {
+    blameStatus.value = 'Line authorship is unavailable until edits sync.'
+    return
+  }
+  if (!globalThis.crypto?.subtle) {
+    blameStatus.value = 'Line authorship requires a secure connection.'
+    return
+  }
+  blameStatus.value = 'Loading line authorship…'
+  blameTimer = setTimeout(async () => {
+    const request = new AbortController()
+    blameRequest = request
+    try {
+      const [result, digest] = await Promise.all([
+        api(`/api/documents/${currentId.value}/blame`, { signal: request.signal }),
+        crypto.subtle.digest('SHA-256', new TextEncoder().encode(current.text.toString())),
+      ])
+      if (request.signal.aborted) return
+      const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+      if (hash !== result.hash) {
+        if (attempt < 3) refreshBlame(350, attempt + 1)
+        else blameStatus.value = 'Line authorship is unavailable until edits sync.'
+        return
+      }
+      let end = 0
+      blameRuns.value = result.runs.map(([count, writer]) => ({ end: end += count, writer }))
+      blameStatus.value = ''
+    } catch (error) {
+      if (!request.signal.aborted) blameStatus.value = `Line authorship unavailable: ${error.message}`
+    }
+  }, delay)
+}
+watch([showBlame, mode, dirtyOffline], () => refreshBlame())
 function onSelection(value, comment = false) { selection.value = value; if (comment) addComment() }
 async function addComment() { if (!canReview.value || roomUnavailable.value) return; await nextTick(); lineComments.value?.open() }
 async function decideSuggestion(suggestion, decision) {
@@ -701,6 +761,9 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
                 Fountain</button></div>
           </div>
           <div class="mobile-extra-actions">
+            <button class="text-button" :aria-pressed="showBlame && mode === 'split'" @click="toggleBlame">
+              <GitCommitHorizontal :size="16" />Line authorship
+            </button>
             <button class="text-button" :disabled="savingPreferences" @click="openSettings">
               <Settings :size="16" />Settings
             </button>
@@ -774,10 +837,21 @@ onBeforeUnmount(() => { cleanup(); profileChannel?.close(); clearTimeout(errorTi
         </div>
         <div v-else class="editing-area">
           <div class="source-pane">
-            <div v-if="mode === 'split'" class="pane-heading">SOURCE</div>
+            <div v-if="mode === 'split' && !mobile" class="pane-heading source-heading"><span>SOURCE</span>
+              <button class="text-button blame-toggle" :aria-pressed="showBlame" aria-label="Line authorship" title="Show the last writer of each source line" @click="toggleBlame">
+                <GitCommitHorizontal :size="13" /> Line authorship
+              </button>
+            </div>
+            <p v-if="showBlame && mode === 'split' && (blameStatus || displaySource !== source)" class="blame-status" role="status">
+              {{ blameStatus || 'Line authorship is hidden while suggested changes are displayed.' }}
+            </p>
+            <p v-else-if="visibleBlame" class="blame-status">Last writer on line {{ cursor.line }}:
+              {{ cursorWriter ? `${cursorWriter.name} (${cursorWriter.key})` : 'Unknown' }}
+            </p>
             <div class="editor-with-review">
               <TextEditor ref="editor" :key="currentId" :ytext="connection.text"
                 :awareness="connection.provider.awareness" :user="session.user" :mode="mode" :review="reviewMode"
+                :blame-runs="visibleBlame"
                 :read-only="!canReview" @selection="onSelection" @cursor="cursor = $event" @geometry="geometry = $event"
                 @display="displaySource = $event" @error="notify" @decide="decideSuggestion" @link-image="linkImage"
                 @open-comment="lineComments?.reveal($event)" @scroll="syncScroll('source', $event)" />
@@ -951,3 +1025,10 @@ I wasn't sure you would.</pre>
   <ShareDialog v-if="shareOpen && connection" :document-id="currentId" :access="documentAccess" :title="titleInput" :user="session.user"
     @close="shareOpen = false" @changed="documentChanged" @error="notify" />
 </template>
+
+<style>
+.pane-heading.source-heading { display: flex; align-items: center; justify-content: space-between; }
+.source-heading .blame-toggle { white-space: nowrap; padding: .2rem .4rem; font-size: .7rem; }
+.source-heading button[aria-pressed="true"] { background: var(--accent-light); color: var(--accent); }
+.blame-status { margin: 0; padding: .3rem .6rem; background: var(--paper); font-size: .75rem; }
+</style>

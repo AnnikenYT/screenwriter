@@ -19,6 +19,7 @@ import { createAccess, normalizeEmail } from './access.js';
 import { applyReviewChanges, projectReview } from '../shared/review-model.js';
 import { TITLE_PAGE_ALIGNMENTS, titlePageAlignment } from '../shared/preferences.js';
 import { defaultEditorColor, isEditorColor, normalizeEditorColor } from '../shared/editor-colors.js';
+import { LineBlame } from './line-blame.js';
 import nodemailer from 'nodemailer';
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,6 +27,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 const textNames = ['screenplay', 'scratchpad'];
 const mapNames = ['meta', 'characters', 'locations', 'comments', 'suggestions'];
 const cookieName = 'screenplay_session';
+const blameKey = Symbol('server blame evidence');
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const token = () => randomBytes(32).toString('base64url');
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -61,6 +63,19 @@ export function createWorkspace(options = {}) {
   if (!db.prepare('PRAGMA table_info(documents)').all().some(column => column.name === 'archived_at')) {
     db.exec('ALTER TABLE documents ADD COLUMN archived_at INTEGER');
   }
+  // Old documents, journals and snapshots have no authenticated evidence.
+  for (const [table, column] of [['documents', 'line_blame'], ['versions', 'line_blame'], ['document_updates', 'blame_evidence']]) {
+    if (!db.prepare(`PRAGMA table_info(${table})`).all().some(field => field.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+    }
+  }
+  const writerOf = user => user && user.id !== 'anonymous'
+    ? { id: user.id, name: user.name, color: /^#[0-9a-f]{6}$/i.test(user.color) ? user.color : null } : null;
+  function verifiedSource(entry) {
+    const actual = entry.doc.getText('screenplay').toString();
+    if (actual !== entry.blame.source.toString()) entry.blame.reset(actual);
+    return actual;
+  }
   const access = createAccess(db, { mode: authMode, publicURL, changed: invalidateAccess });
   db.exec(`CREATE TABLE IF NOT EXISTS account_preferences(
     account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
@@ -70,11 +85,11 @@ export function createWorkspace(options = {}) {
   const setAccountAlignment = db.prepare(`INSERT INTO account_preferences(account_id,title_page_alignment) VALUES(?,?)
     ON CONFLICT(account_id) DO UPDATE SET title_page_alignment=excluded.title_page_alignment`);
   const accountAlignment = id => titlePageAlignment(getAccountAlignment.get(id)?.title_page_alignment);
-  const appendUpdate = db.prepare('INSERT INTO document_updates(document_id,state) VALUES(?,?)');
+  const appendUpdate = db.prepare('INSERT INTO document_updates(document_id,state,blame_evidence) VALUES(?,?,?)');
   const updateMetadata = db.prepare('UPDATE documents SET title=?,updated_at=? WHERE id=?');
-  const selectUpdates = db.prepare('SELECT state FROM document_updates WHERE document_id=? ORDER BY sequence');
+  const selectUpdates = db.prepare('SELECT state,blame_evidence FROM document_updates WHERE document_id=? ORDER BY sequence');
   const deleteUpdates = db.prepare('DELETE FROM document_updates WHERE document_id=?');
-  const updateBase = db.prepare('UPDATE documents SET state=? WHERE id=?');
+  const updateBase = db.prepare('UPDATE documents SET state=?,line_blame=? WHERE id=?');
   function transaction(work) {
     db.exec('BEGIN IMMEDIATE');
     try { const result = work(); db.exec('COMMIT'); return result; }
@@ -265,7 +280,7 @@ export function createWorkspace(options = {}) {
   const documents = new Map();
   function permissions(req, id, action) { return access.requirePermission(req, id, action); }
   function socketAccess(ws) {
-    const user = authMode === 'none' ? session(ws.request) || { id: ws.actorId, name: 'Writer' }
+    const user = authMode === 'none' ? session(ws.request) || (ws.actorId === 'anonymous' ? { id: 'anonymous', name: 'Writer' } : null)
       : session(ws.request) || access.guest(ws.request);
     if (!user || user.id !== ws.actorId) throw fail(401, 'Session expired');
     ws.request.user = user;
@@ -324,32 +339,52 @@ export function createWorkspace(options = {}) {
     if (!lifecycle) throw fail(404, 'Document not found');
     if (lifecycle.archived_at) throw fail(409, 'Screenplay is archived. Restore it before opening.');
     if (documents.has(id)) return documents.get(id);
-    const row = db.prepare('SELECT state FROM documents WHERE id=?').get(id);
+    const row = db.prepare('SELECT state,line_blame FROM documents WHERE id=?').get(id);
     if (!row) throw fail(404, 'Document not found');
     prune();
     const doc = new Y.Doc();
     Y.applyUpdate(doc, new Uint8Array(row.state));
-    const updates = selectUpdates.all(id);
-    for (const update of updates) Y.applyUpdate(doc, new Uint8Array(update.state));
     textNames.forEach(name => doc.getText(name));
     mapNames.forEach(name => doc.getMap(name));
+    const text = doc.getText('screenplay');
+    const blame = new LineBlame(text.toString(), JSON.parse(row.line_blame));
+    const updates = selectUpdates.all(id);
+    let replayEvidence;
+    let replayObserved;
+    const replay = event => { replayObserved = true; blame.update(text, event.delta, replayEvidence); };
+    text.observe(replay);
+    for (const update of updates) {
+      replayEvidence = JSON.parse(update.blame_evidence);
+      replayObserved = false;
+      Y.applyUpdate(doc, new Uint8Array(update.state));
+      if (replayEvidence?.restore && !replayObserved) blame.reset(text.toString(), replayEvidence.restore);
+    }
+    text.unobserve(replay);
     const awareness = new awarenessProtocol.Awareness(doc);
     awareness.setLocalState(null);
-    const entry = { id, doc, awareness, clients: new Map(), dirty: updates.length > 0, journalCount: updates.length, historyBytes: row.state.length + updates.reduce((sum, update) => sum + update.state.length, 0), applying: false, broadcasts: [] };
+    const entry = { id, doc, blame, awareness, clients: new Map(), dirty: updates.length > 0, journalCount: updates.length, historyBytes: row.state.length + updates.reduce((sum, update) => sum + update.state.length, 0), applying: false, broadcasts: [] };
     documents.set(id, entry);
-    doc.on('update', update => {
+    doc.on('update', (update, _origin, _doc, tx) => {
       if (entry.applying) { entry.broadcasts.push(update); return; }
-      validateDocument(entry);
-      if (entry.journalCount >= compactAfter || entry.historyBytes + update.length > maxHistory) {
-        const state = Y.encodeStateAsUpdate(entry.doc);
-        if (state.length > maxHistory) { discardRoom(id, entry); throw fail(413, 'Document history limit exceeded'); }
-        compact(id, entry, state);
-        updateMetadata.run(titleOf(entry.doc), Date.now(), id);
-        entry.dirty = true;
-      } else persistUpdate(id, entry, update);
-      broadcastUpdate(entry, update);
+      try {
+        const evidence = tx.meta.has(blameKey) ? tx.meta.get(blameKey) : tx.origin?.[blameKey];
+        if (evidence?.restore && !tx.meta.has(blameKey)) blame.reset(text.toString(), evidence.restore);
+        validateDocument(entry);
+        if (entry.journalCount >= compactAfter || entry.historyBytes + update.length > maxHistory) {
+          const state = Y.encodeStateAsUpdate(entry.doc);
+          if (state.length > maxHistory) throw fail(413, 'Document history limit exceeded');
+          compact(id, entry, state, true);
+          entry.dirty = true;
+        } else persistUpdate(id, entry, update, evidence);
+        broadcastUpdate(entry, update);
+      } catch (error) { discardRoom(id, entry); throw error; }
     });
-    doc.getText('screenplay').observe(() => scheduleReconciliation(entry));
+    text.observe(event => {
+      const evidence = entry.applying ? entry.evidence : event.transaction.origin?.[blameKey];
+      blame.update(text, event.delta, evidence);
+      if (!entry.applying) event.transaction.meta.set(blameKey, evidence);
+      scheduleReconciliation(entry);
+    });
     scheduleReconciliation(entry);
     awareness.on('update', ({ added, updated, removed }, origin) => {
       if (entry.clients.has(origin)) {
@@ -369,15 +404,20 @@ export function createWorkspace(options = {}) {
     if (textNames.reduce((size, name) => size + entry.doc.getText(name).length, 0) > maxDocument) throw fail(413, 'Source length limit exceeded');
     for (const name of entry.doc.share.keys()) if (![...textNames, ...mapNames].includes(name)) throw fail(400, 'Unknown shared type');
   }
-  function compact(id, entry, state = Y.encodeStateAsUpdate(entry.doc)) {
-    transaction(() => { updateBase.run(state, id); deleteUpdates.run(id); });
+  function compact(id, entry, state = Y.encodeStateAsUpdate(entry.doc), edited = false) {
+    verifiedSource(entry);
+    transaction(() => {
+      updateBase.run(state, JSON.stringify(entry.blame.runs()), id);
+      deleteUpdates.run(id);
+      if (edited) updateMetadata.run(titleOf(entry.doc), Date.now(), id);
+    });
     entry.journalCount = 0;
     entry.historyBytes = state.length;
   }
-  function persistUpdate(id, entry, update) {
+  function persistUpdate(id, entry, update, evidence) {
     // One FULL-synchronous commit per update, never a full-document encode.
     transaction(() => {
-      appendUpdate.run(id, update);
+      appendUpdate.run(id, update, evidence ? JSON.stringify(evidence) : null);
       updateMetadata.run(titleOf(entry.doc), Date.now(), id);
     });
     entry.dirty = true;
@@ -410,18 +450,24 @@ export function createWorkspace(options = {}) {
     if (entry.journalCount >= compactAfter || entry.historyBytes + update.length > maxHistory) compact(id, entry);
     if (entry.historyBytes + update.length > maxHistory) throw new Error('CRDT history limit exceeded');
     entry.applying = true;
+    // If an earlier out-of-order packet is waiting, Yjs may integrate it in
+    // this same transaction. Never credit its changes to the current socket.
+    const pending = entry.doc.store.pendingStructs || entry.doc.store.pendingDs;
+    const evidence = pending ? null : { writer: writerOf(ws.request.user) };
+    entry.evidence = evidence;
     entry.broadcasts = [];
     try {
       Y.applyUpdate(entry.doc, update, ws);
       validateDocument(entry);
       // Store the original delta, including any out-of-order pending structs.
-      persistUpdate(id, entry, update);
+      persistUpdate(id, entry, update, evidence);
       for (const outgoing of entry.broadcasts) broadcastUpdate(entry, outgoing);
     } catch (error) {
       discardRoom(id, entry);
       throw error;
     } finally {
       entry.applying = false;
+      entry.evidence = null;
       entry.broadcasts = [];
     }
   }
@@ -434,11 +480,13 @@ export function createWorkspace(options = {}) {
   }
   function snapshot(id, label) {
     const entry = getDocument(id);
+    verifiedSource(entry);
     const version = { id: randomUUID(), label: String(label || 'Saved version').slice(0, 200), createdAt: Date.now() };
     const state = Y.encodeStateAsUpdate(entry.doc);
     transaction(() => {
-      db.prepare('INSERT INTO versions VALUES(?,?,?,?,?)').run(version.id, id, version.label, version.createdAt, state);
-      updateBase.run(state, id);
+      const blame = JSON.stringify(entry.blame.runs());
+      db.prepare('INSERT INTO versions(id,document_id,label,created_at,state,line_blame) VALUES(?,?,?,?,?,?)').run(version.id, id, version.label, version.createdAt, state, blame);
+      updateBase.run(state, blame, id);
       deleteUpdates.run(id);
     });
     entry.historyBytes = state.length;
@@ -502,7 +550,9 @@ export function createWorkspace(options = {}) {
     doc.getText('screenplay').insert(0, text);
     doc.getMap('meta').set('title', title);
     reconcileSheets(doc);
-    db.prepare('INSERT INTO documents(id,title,state,updated_at,scope,owner_id) VALUES(?,?,?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now(), authMode === 'oauth' ? 'private' : 'shared', authMode === 'oauth' ? req.user.id : null);
+    const initial = new LineBlame(text);
+    if (text) initial.writers.fill(writerOf(req.user));
+    db.prepare('INSERT INTO documents(id,title,state,updated_at,scope,owner_id,line_blame) VALUES(?,?,?,?,?,?,?)').run(id, title, Y.encodeStateAsUpdate(doc), Date.now(), authMode === 'oauth' ? 'private' : 'shared', authMode === 'oauth' ? req.user.id : null, JSON.stringify(initial.runs()));
     doc.destroy();
     res.status(201).json({ id, title });
   });
@@ -622,6 +672,17 @@ export function createWorkspace(options = {}) {
     getDocument(req.params.id);
     res.json(db.prepare('SELECT id,label,created_at AS createdAt FROM versions WHERE document_id=? ORDER BY created_at DESC').all(req.params.id));
   });
+  app.get('/api/documents/:id/blame', (req, res) => {
+    const entry = getDocument(req.params.id);
+    const hash = sha(verifiedSource(entry));
+    const keys = new Map();
+    const runs = entry.blame.runs().map(([count, writer]) => {
+      if (!writer) return [count, null];
+      if (!keys.has(writer.id)) keys.set(writer.id, sha(`${req.params.id}:${writer.id}`).slice(0, 8));
+      return [count, { key: keys.get(writer.id), name: writer.name, color: writer.color }];
+    });
+    res.json({ hash, runs });
+  });
   app.post('/api/documents/:id/versions', (req, res) => res.status(201).json(snapshot(req.params.id, req.body?.label)));
   app.get('/api/documents/:id/versions/:versionId', (req, res) => {
     const row = getVersion(req.params.id, req.params.versionId), doc = new Y.Doc();
@@ -661,7 +722,7 @@ export function createWorkspace(options = {}) {
           } else target.set(key, value);
         }
       }
-    }, 'restore');
+    }, { [blameKey]: { restore: JSON.parse(row.line_blame) || [] } });
     old.destroy();
     res.json({ ok: true });
   });
@@ -737,7 +798,7 @@ export function createWorkspace(options = {}) {
         }
       }
       suggestions.set(req.params.suggestionId, { ...suggestion, status: decision, decidedBy: req.user.name });
-    }, 'suggestion-decision');
+    }, { [blameKey]: decision === 'accepted' ? { writer: writerOf(req.user) } : null });
     res.json({ ok: true });
   });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxImage, files: 1, fields: 0, parts: 1 } });
